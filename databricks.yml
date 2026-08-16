@@ -92,6 +92,10 @@ variables:
       après chaque bascule de table. En général le client_id de l'application.
       Laissée vide, aucun GRANT n'est émis (le job le signale) : les droits sont
       alors à accorder à la main après chaque exécution — voir DEPLOIEMENT.md §5.
+      ⚠️ Propre à chaque cible : l'application se nomme
+      « backflush-analytics-${bundle.target} », donc dev, preprod et prod ont
+      trois principaux de service distincts. La valeur se déclare dans le bloc
+      `targets`, pas ici — ce défaut vide n'est qu'un garde-fou.
     default: ""
 
   notification_email:
@@ -118,6 +122,13 @@ targets:
       # En développement, le modèle est reconstruit sur un historique court :
       # le job tourne en quelques minutes au lieu de plusieurs dizaines.
       date_from: "2026-06-01"
+      # client_id du principal de service de « backflush-analytics-dev ».
+      # Ce n'est pas un secret — un identifiant, jamais une clé — mais il est
+      # propre à cette cible : preprod et prod portent d'autres applications,
+      # donc d'autres principaux. Le relever avec :
+      #   databricks apps get backflush-analytics-<cible> -o json \
+      #     | jq -r '.service_principal_client_id'
+      app_service_principal: "65abe779-9d6a-4f89-95aa-ad394d85389e"
 
   preprod:
     mode: production

@@ -291,8 +291,24 @@ GRANT SELECT ON ALL TABLES IN SCHEMA backflush TO "<client_id>";
 ALTER DEFAULT PRIVILEGES IN SCHEMA backflush GRANT SELECT ON TABLES TO "<client_id>";
 ```
 
-Reporter ensuite ce `client_id` dans la variable `app_service_principal` du
-bundle, pour que chaque bascule réattribue le droit.
+Ces trois ordres se complètent et n'ont pas la même portée :
+
+| Ordre | Portée | Rejoué par le job ? |
+|---|---|---|
+| `GRANT USAGE ON SCHEMA` | Le schéma, qui n'est créé qu'une fois | Non — **irremplaçable, à faire à la main** |
+| `GRANT SELECT ON ALL TABLES` | Les tables existant **à cet instant** | Sans objet : la bascule les remplace |
+| `ALTER DEFAULT PRIVILEGES` | Les tables **futures**, créées par le rôle qui exécute cet ordre | — |
+
+`ALTER DEFAULT PRIVILEGES` n'est un filet de sécurité que s'il est exécuté par
+l'identité sous laquelle **tourne le job** : les privilèges par défaut sont
+attachés au rôle créateur, pas au schéma. Exécuté sous votre compte alors que le
+job tourne sous un autre, il ne couvrira rien.
+
+Reporter enfin ce `client_id` dans la variable `app_service_principal` de la
+**cible** concernée (bloc `targets` de `databricks.yml`), pour que chaque
+bascule réattribue le droit. La variable est propre à chaque cible :
+l'application se nomme `backflush-analytics-<cible>`, donc dev, preprod et prod
+ont trois principaux de service distincts.
 
 > Laisser `app_service_principal` vide ne fait pas échouer le job : celui-ci
 > journalise un avertissement et n'émet aucun `GRANT`. Mais les tables publiées
@@ -301,7 +317,49 @@ bundle, pour que chaque bascule réattribue le droit.
 > la main tant que la variable n'est pas renseignée, **et à refaire après chaque
 > exécution du job**, puisque la bascule recrée les tables.
 
-## 6. Vérifier l'application
+### Renseigner la variable ne nécessite pas de relancer le pipeline
+
+Le `GRANT SELECT ON ALL TABLES` ci-dessus couvre les tables **déjà publiées** :
+l'application est immédiatement fonctionnelle. La variable ne sert qu'aux
+bascules suivantes — elle évite d'avoir à refaire le `GRANT` chaque matin. Un
+`databricks bundle deploy` suffit donc à l'enregistrer.
+
+## 6. Démarrer, redéployer, vérifier
+
+### `deploy` ne déclenche jamais un job
+
+C'est la distinction qui compte au quotidien :
+
+| Commande | Effet | Réexécute le pipeline ? |
+|---|---|---|
+| `databricks bundle deploy` | Téléverse les sources et met à jour les **définitions** (job, app, planification) | **Non** |
+| `databricks bundle run backflush_pipeline` | Exécute le pipeline immédiatement | Oui — c'est son rôle |
+| `databricks bundle run backflush_analytics` | Déploie et (re)démarre l'**application** | Non |
+| `databricks apps start backflush-analytics-<cible>` | Démarre l'application déjà déployée | Non |
+
+Un `deploy` peut donc être répété autant de fois que nécessaire — corriger une
+variable, recompiler le frontend, ajuster une requête — sans reconstruire le
+modèle ni republier Lakebase. Les données de Lakebase ne sont écrites que par la
+tâche `publier_lakebase`, elle-même déclenchée uniquement par un `run` explicite
+ou par la planification quotidienne.
+
+Seule exception à surveiller : la planification. En cible `dev`,
+`schedule_pause_status` vaut `PAUSED`, donc rien ne part tout seul ; en `preprod`
+et `prod` elle est `UNPAUSED` et le job démarre à 5 h 00, que vous ayez déployé
+ou non.
+
+### Démarrer l'application
+
+```bash
+databricks bundle run backflush_analytics -t dev --profile <PROFIL>
+```
+
+Le redémarrage relit la configuration et rouvre le pool de connexions. Il
+n'altère aucune donnée : l'application est en lecture seule — ses connexions
+sont ouvertes en `default_transaction_read_only`. Une coupure pendant le
+redémarrage se limite au temps de démarrage du conteneur.
+
+### Vérifier
 
 ```bash
 databricks apps get   backflush-analytics-dev --profile <PROFIL> -o json | jq '.app_status'
