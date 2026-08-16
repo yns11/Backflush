@@ -52,9 +52,18 @@ variables:
     default: ""
   lakebase_pg_schema:
     default: backflush
-  lakebase_instance:
-    description: Nom de l'instance Lakebase déclarée comme ressource de l'application.
+
+  # --- Ressource « postgres » de l'application ------------------------------
+  # Chemins de ressource COMPLETS, pas des noms courts. Les relever avec :
+  #   databricks postgres list-branches  <PROJET> --profile <PROFIL>
+  #   databricks postgres list-databases <PROJET> <BRANCHE> --profile <PROFIL>
+  lakebase_branch:
+    description: projects/<PROJET>/branches/<BRANCHE>
     default: ""
+  lakebase_database_path:
+    description: projects/<PROJET>/branches/<BRANCHE>/databases/<BASE>
+    default: ""
+
   llm_endpoint:
     description: Endpoint de serving utilisé par l'assistant IA.
     default: databricks-claude-sonnet-4-5

@@ -13,17 +13,29 @@
 ## 1. Relever les identifiants Lakebase
 
 ```bash
-databricks postgres list-projects --profile <PROFIL>
-databricks postgres list-branches   <PROJET> --profile <PROFIL>
-databricks postgres get-endpoint "projects/<ID>/branches/<BRANCHE>/endpoints/<ENDPOINT>" \
+databricks postgres list-projects  --profile <PROFIL>
+databricks postgres list-branches  <PROJET> --profile <PROFIL>
+databricks postgres list-databases <PROJET> <BRANCHE> --profile <PROFIL>
+databricks postgres get-endpoint "projects/<PROJET>/branches/<BRANCHE>/endpoints/<ENDPOINT>" \
   --profile <PROFIL> -o json | jq -r '.status.hosts.host'
 ```
 
-Trois valeurs à conserver :
+Quatre valeurs à conserver :
 
-- `lakebase_host` — l'hôte retourné ci-dessus ;
-- `lakebase_endpoint` — le chemin `projects/<ID>/branches/<BRANCHE>/endpoints/<ENDPOINT>` ;
-- `lakebase_instance` — le nom de l'instance, pour la ressource de l'application.
+| Variable | Forme attendue |
+|---|---|
+| `lakebase_host` | `ep-….database.<region>.cloud.databricks.com` |
+| `lakebase_endpoint` | `projects/<PROJET>/branches/<BRANCHE>/endpoints/<ENDPOINT>` |
+| `lakebase_branch` | `projects/<PROJET>/branches/<BRANCHE>` |
+| `lakebase_database_path` | `projects/<PROJET>/branches/<BRANCHE>/databases/<BASE>` |
+
+> **Ce sont des chemins de ressource complets, pas des noms courts.** Passer le
+> seul nom du projet à la ressource de l'application fait échouer le déploiement
+> avec `Database instance <nom> does not exist` — voir §7.
+>
+> Le nom de la base est souvent **tireté** (`databricks-postgres`) là où le nom
+> Postgres est souligné (`databricks_postgres`). `list-databases` donne la forme
+> exacte ; ne pas la deviner.
 
 ## 2. Compiler le frontend
 
@@ -41,13 +53,58 @@ databricks bundle validate -t dev --profile <PROFIL>
 
 databricks bundle deploy -t dev --profile <PROFIL> \
   --var="lakebase_host=<HOTE>" \
-  --var="lakebase_endpoint=projects/<ID>/branches/production/endpoints/<EP>" \
-  --var="lakebase_instance=<INSTANCE>" \
+  --var="lakebase_endpoint=projects/<PROJET>/branches/production/endpoints/<EP>" \
+  --var="lakebase_branch=projects/<PROJET>/branches/production" \
+  --var="lakebase_database_path=projects/<PROJET>/branches/production/databases/<BASE>" \
   --var="notification_email=<equipe@exemple.fr>"
 ```
 
 En `preprod` et `prod`, fixer ces variables dans la cible correspondante de
 `databricks.yml` plutôt que sur la ligne de commande.
+
+### Repli si la clé `postgres` est refusée par le schéma DAB
+
+Le schéma des bundles est parfois en retard sur l'API Lakebase. Si
+`bundle validate` rejette la ressource `postgres`, déployer sans elle puis
+l'attacher par l'API — c'est la méthode documentée pour toute application :
+
+1. Commenter le bloc `- name: postgres` dans `resources/backflush_app.yml`, puis
+   `databricks bundle deploy`.
+2. Lire les ressources actuelles de l'application — `create-update` **remplace**
+   tout le tableau `resources`, il faut donc y réinjecter le endpoint de serving :
+
+   ```bash
+   databricks apps get backflush-analytics-dev --profile <PROFIL> -o json | jq '.resources'
+   ```
+
+3. Écrire `update.json` avec l'existant **plus** la ressource Lakebase :
+
+   ```json
+   {
+     "update_mask": "resources",
+     "app": {
+       "resources": [
+         {
+           "name": "postgres",
+           "postgres": {
+             "branch": "projects/<PROJET>/branches/production",
+             "database": "projects/<PROJET>/branches/production/databases/<BASE>",
+             "permission": "CAN_CONNECT_AND_CREATE"
+           }
+         },
+         {
+           "name": "serving-endpoint",
+           "serving_endpoint": { "name": "<ENDPOINT_LLM>", "permission": "CAN_QUERY" }
+         }
+       ]
+     }
+   }
+   ```
+
+4. `databricks apps create-update backflush-analytics-dev --json @update.json --profile <PROFIL>`
+
+Utiliser `create-update`, et non `apps update` : ce dernier est l'ancienne
+commande et ne sait pas modifier les ressources d'une application.
 
 ## 4. Première exécution du pipeline
 
@@ -116,7 +173,10 @@ Puis, sur l'URL de l'application :
 
 | Symptôme | Cause la plus fréquente | Correction |
 |---|---|---|
-| `503` sur toutes les routes de données, `/api/health` OK | Ressource `database` non attachée | L'attacher, redéployer l'application |
+| `Database instance <nom> does not exist (404)` au déploiement | Clé de ressource `database` (dépréciée) au lieu de `postgres`, ou nom court au lieu d'un chemin de ressource | Utiliser `postgres` avec `branch` et `database` en chemins complets (§1) |
+| `503` sur toutes les routes de données, `/api/health` OK | Ressource `postgres` non attachée | L'attacher, redéployer l'application |
+| `permission denied for schema backflush (42501)` | Le schéma appartient au job (exécuté sous votre identité), pas au principal de service, qui n'a que `CAN_CONNECT_AND_CREATE` | Faire le `GRANT` de l'étape 5 — obligatoire, la ressource seule ne suffit pas |
+| Journal « Connexion par mot de passe injecté » | `LAKEBASE_ENDPOINT` absent : la ressource n'a fourni qu'un `PGPASSWORD` | Fonctionnel, mais la rotation dépend de la plateforme. Définir `LAKEBASE_ENDPOINT` pour que l'application gère son propre jeton |
 | `permission denied for table …` | Le `GRANT` de l'étape 5 n'a pas été fait, ou `app_service_principal` est vide dans le bundle | Refaire l'étape 5, redéployer, relancer le job |
 | Interface absente, API fonctionnelle | `scripts/build_frontend.sh` non exécuté avant le déploiement | Compiler puis redéployer |
 | L'application plante au démarrage | `psycopg` absent des dépendances | Vérifier `app/requirements.txt` |

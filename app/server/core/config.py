@@ -41,6 +41,14 @@ class Settings(BaseSettings):
     lakebase_endpoint: str | None = Field(
         default=None, description="Chemin de ressource projects/<id>/branches/<b>/endpoints/<e>"
     )
+    pgpassword: str | None = Field(
+        default=None,
+        description=(
+            "Mot de passe injecté par la ressource « postgres » de l'application. "
+            "Utilisé uniquement en l'absence de LAKEBASE_ENDPOINT : la génération "
+            "de jeton à la demande est préférée, car elle garantit la rotation."
+        ),
+    )
 
     # --- Pool de connexions --------------------------------------------------
     pool_min_size: int = 1
@@ -88,8 +96,33 @@ class Settings(BaseSettings):
 
     @property
     def base_de_donnees_configuree(self) -> bool:
-        """Vrai si l'un des deux modes de connexion est exploitable."""
-        return bool(self.lakebase_pg_url) or bool(self.pghost and self.lakebase_endpoint)
+        """Vrai si l'un des trois modes de connexion est exploitable.
+
+        Voir :attr:`mode_connexion` pour leur ordre de priorité.
+        """
+        return bool(self.lakebase_pg_url) or bool(
+            self.pghost and (self.lakebase_endpoint or self.pgpassword)
+        )
+
+    @property
+    def mode_connexion(self) -> str:
+        """Mode retenu, par priorité décroissante.
+
+        * ``url_directe`` — ``LAKEBASE_PG_URL`` : développement local.
+        * ``oauth_lakebase`` — hôte + endpoint : l'application génère elle-même
+          un jeton et le renouvelle. **Mode recommandé en production**, car la
+          rotation est garantie par l'application.
+        * ``mot_de_passe_injecte`` — hôte + ``PGPASSWORD`` sans endpoint : la
+          ressource « postgres » a fourni un identifiant, mais sa rotation
+          dépend de la plateforme. Fonctionne, avec cette réserve.
+        """
+        if self.lakebase_pg_url:
+            return "url_directe"
+        if self.pghost and self.lakebase_endpoint:
+            return "oauth_lakebase"
+        if self.pghost and self.pgpassword:
+            return "mot_de_passe_injecte"
+        return "non_configure"
 
     def resume(self) -> dict[str, object]:
         """Empreinte de configuration exposable (aucun secret)."""
@@ -97,11 +130,7 @@ class Settings(BaseSettings):
             "application": self.app_name,
             "version": self.app_version,
             "environnement": self.environnement,
-            "mode_connexion": (
-                "url_directe" if self.lakebase_pg_url
-                else "oauth_lakebase" if self.pghost
-                else "non_configure"
-            ),
+            "mode_connexion": self.mode_connexion,
             "schema": self.pg_schema,
             "assistant_actif": self.llm_enabled,
             "endpoint_llm": self.llm_endpoint if self.llm_enabled else None,

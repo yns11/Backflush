@@ -73,8 +73,9 @@ class LakebasePool:
             LOGGER.warning("Lakebase non configurée : les routes de données répondront 503.")
             return
 
-        if settings.lakebase_pg_url:
-            conninfo = settings.lakebase_pg_url
+        mode = settings.mode_connexion
+        if mode == "url_directe":
+            conninfo = settings.lakebase_pg_url or ""
             self._kwargs = {}
         else:
             conninfo = ""
@@ -83,10 +84,24 @@ class LakebasePool:
                 "port": settings.pgport,
                 "dbname": settings.pgdatabase,
                 "user": settings.pguser or self._current_user(),
-                "password": self._generate_token(),
                 "sslmode": "require",
             }
-            self._start_refresher()
+            if mode == "oauth_lakebase":
+                # L'application génère et renouvelle elle-même le jeton :
+                # la validité de la connexion ne dépend d'aucun redémarrage.
+                self._kwargs["password"] = self._generate_token()
+                self._start_refresher()
+            else:
+                # La ressource « postgres » de l'application a injecté un
+                # identifiant. Il fonctionne, mais sa rotation appartient à la
+                # plateforme : sans LAKEBASE_ENDPOINT, l'application ne peut pas
+                # en produire un nouveau. On le signale plutôt que de le subir.
+                self._kwargs["password"] = settings.pgpassword
+                LOGGER.warning(
+                    "Connexion par mot de passe injecté (PGPASSWORD). Définissez "
+                    "LAKEBASE_ENDPOINT pour que l'application gère elle-même la "
+                    "rotation du jeton."
+                )
 
         self._pool = ConnectionPool(
             conninfo=conninfo,

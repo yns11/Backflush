@@ -5,8 +5,26 @@
 # script scripts/build_frontend.sh DOIT avoir été exécuté avant le déploiement :
 # sans app/server/static, l'API répond mais l'interface est absente.
 #
-# Les ressources déclarées ici sont résolues par la plateforme et exposées à
-# l'application (voir app/app.yaml) : aucun identifiant n'est écrit en dur.
+# ⚠️ RESSOURCE LAKEBASE — la clé compte
+# -----------------------------------------------------------------------------
+# Deux générations de Lakebase coexistent, avec deux clés de ressource :
+#
+#   • `database` + instance_name/database_name → génération « database instance »,
+#     DÉPRÉCIÉE. L'utiliser sur un projet Lakebase échoue au déploiement avec
+#     « Database instance <nom> does not exist » (404), même si le projet existe.
+#
+#   • `postgres` + branch/database → génération « projects / branches /
+#     endpoints », celle des projets Lakebase actuels. Les deux valeurs sont des
+#     CHEMINS DE RESSOURCE COMPLETS, pas des noms courts :
+#         projects/<PROJET>/branches/<BRANCHE>
+#         projects/<PROJET>/branches/<BRANCHE>/databases/<BASE>
+#     Les relever avec `databricks postgres list-branches` et `list-databases` —
+#     le nom de la base est souvent tirété (« databricks-postgres »).
+#
+# Si `databricks bundle validate` rejette la clé `postgres` (le schéma DAB est
+# parfois en retard sur l'API Lakebase), voir la variable `attacher_lakebase` :
+# la mettre à `false`, déployer, puis attacher la ressource par
+# `databricks apps create-update` — procédure détaillée dans docs/DEPLOIEMENT.md.
 # =============================================================================
 
 resources:
@@ -19,11 +37,11 @@ resources:
       source_code_path: ../app
 
       resources:
-        - name: database
-          description: Instance Lakebase hébergeant le schéma backflush.
-          database:
-            instance_name: ${var.lakebase_instance}
-            database_name: ${var.lakebase_database}
+        - name: postgres
+          description: Projet Lakebase hébergeant le schéma backflush.
+          postgres:
+            branch: ${var.lakebase_branch}
+            database: ${var.lakebase_database_path}
             permission: CAN_CONNECT_AND_CREATE
 
         - name: serving-endpoint

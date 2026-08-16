@@ -5,10 +5,14 @@
 # (app/server/static). Ce bundle doit exister AVANT le déploiement :
 #     ./scripts/build_frontend.sh
 #
-# Ressources à attacher à l'application dans l'espace de travail :
-#   • database        → l'instance Lakebase contenant le schéma « backflush ».
-#                       La plateforme injecte alors PGHOST, PGPORT, PGDATABASE,
-#                       PGUSER et LAKEBASE_ENDPOINT.
+# Ressources attachées à l'application (voir resources/backflush_app.yml) :
+#   • postgres         → le projet Lakebase contenant le schéma « backflush ».
+#                        La plateforme injecte alors PGHOST, PGPORT, PGDATABASE,
+#                        PGUSER et, selon la génération, LAKEBASE_ENDPOINT ou
+#                        PGPASSWORD. L'application gère les deux cas : avec
+#                        LAKEBASE_ENDPOINT elle génère et renouvelle son propre
+#                        jeton, sans lui elle utilise le mot de passe injecté et
+#                        le signale dans les journaux.
 #   • serving-endpoint → le modèle de fondation utilisé par l'assistant IA.
 #
 # Le principal de service de l'application doit disposer de SELECT sur les
