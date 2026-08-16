@@ -109,6 +109,46 @@ requête de la journée. À arbitrer avec l'équipe plateforme selon le coût du
 .\scripts\build_frontend.ps1           # Windows PowerShell
 ```
 
+```bat
+scripts\build_frontend.cmd             :: Windows, stratégie d'exécution restrictive
+```
+
+### « L'exécution de scripts est désactivée sur ce système »
+
+Message courant sur un poste d'entreprise : la stratégie d'exécution PowerShell
+bloque les fichiers `.ps1`. Trois réponses, de la plus légère à la plus sûre.
+
+**1. Les enveloppes `.cmd`** — un fichier `.cmd` n'est pas soumis à la stratégie
+et relance le script dans un processus qui la contourne, sans rien modifier
+durablement :
+
+```bat
+scripts\build_frontend.cmd
+scripts\deploy.cmd dev PROD --var="lakebase_host=..." --var="..."
+```
+
+**2. Le contournement ponctuel**, à l'invocation :
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\deploy.ps1 dev PROD --var="..."
+```
+
+**3. La procédure manuelle**, qui n'exécute aucun script — la seule qui
+fonctionne quand la stratégie est imposée par une règle de groupe (`Get-ExecutionPolicy -List`
+affiche alors une valeur sur la ligne `MachinePolicy` ou `UserPolicy`) :
+
+```powershell
+cd app\client
+npm ci
+npm run typecheck
+npm run build
+cd ..\..
+databricks bundle deploy -t dev -p PROD --var="..." --var="..."
+```
+
+Dans ce dernier cas, veillez vous-même à l'ordre : la compilation **avant** le
+déploiement. C'est précisément ce que les scripts garantissent.
+
 Les deux scripts **localisent npm automatiquement**, y compris hors `PATH` — cas
 courant d'une installation Node.js sous `C:\Program Files\nodejs`. Si votre
 installation est ailleurs, indiquez-la par variable d'environnement plutôt que
