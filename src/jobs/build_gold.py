@@ -130,6 +130,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Tolérance en unités au-delà de laquelle une ligne n'est plus conforme.",
     )
     parser.add_argument(
+        "--seuil-dq-pct",
+        type=float,
+        default=5.0,
+        help=(
+            "Matérialité des contrôles de couverture, en %%. Au-delà de cette part "
+            "de lignes ou de production non couverte par le référentiel ou la "
+            "nomenclature, le job échoue. Défaut : 5 %%."
+        ),
+    )
+    parser.add_argument(
         "--company-predicate",
         default="1 = 1",
         help=(
@@ -169,6 +179,7 @@ def build_sql_params(args: argparse.Namespace) -> dict[str, str]:
         "silver_schema": validate_identifier(args.silver_schema, label="silver_schema"),
         "date_from": validate_iso_date(args.date_from, label="date_from"),
         "seuil_conformite": validate_number(args.seuil_conformite, label="seuil_conformite"),
+        "seuil_dq_pct": validate_number(args.seuil_dq_pct, label="seuil_dq_pct"),
         # Non validable syntaxiquement : documenté comme paramètre d'exploitation,
         # jamais alimenté par une saisie utilisateur.
         "company_predicate": args.company_predicate,
@@ -261,6 +272,8 @@ PUBLISHED_TABLES = (
     "agg_ecart_hebdo_programme",
     "agg_ecart_composant",
     "dq_controles",
+    "dq_articles_hors_referentiel",
+    "dq_parents_sans_nomenclature",
 )
 
 
@@ -275,7 +288,7 @@ def _collect_row_counts(spark, params: dict[str, str]) -> dict[str, int]:
 def _check_data_quality(spark, params: dict[str, str], *, fail_on_error: bool) -> None:
     fqn = f"{params['catalog']}.{params['schema']}.dq_controles"
     rows = spark.sql(
-        f"SELECT controle, severite, valeur, message FROM {fqn} "
+        f"SELECT controle, severite, valeur, seuil, message FROM {fqn} "
         f"WHERE en_anomalie ORDER BY severite, controle"
     ).collect()
 
@@ -290,10 +303,20 @@ def _check_data_quality(spark, params: dict[str, str], *, fail_on_error: bool) -
         )
 
     if blocking and fail_on_error:
-        noms = ", ".join(row["controle"] for row in blocking)
+        detail = "\n".join(
+            f"  • {row['controle']} = {row['valeur']} (seuil {row['seuil']}) — {row['message']}"
+            for row in blocking
+        )
         raise RuntimeError(
-            f"Contrôles qualité bloquants en anomalie : {noms}. "
-            f"Consulter {fqn} pour le détail."
+            "Contrôles qualité bloquants en anomalie :\n"
+            + detail
+            + f"\n\nTous les contrôles : SELECT * FROM {fqn} ORDER BY severite;"
+            + f"\nRéférences concernées : {fqn.rsplit('.', 1)[0]}."
+            + "dq_articles_hors_referentiel"
+            + f" et {fqn.rsplit('.', 1)[0]}.dq_parents_sans_nomenclature"
+            + "\n\nSi la couverture est structurellement incomplète et assumée, "
+              "relever --seuil-dq-pct. En dernier recours, --no-fail-on-dq-error "
+              "publie malgré tout, en sachant que les chiffres sont partiels."
         )
 
 

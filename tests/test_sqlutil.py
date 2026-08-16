@@ -113,15 +113,15 @@ class TestFichiersSqlReels:
     """Les scripts livrés doivent se rendre et se découper sans erreur."""
 
     def test_tous_les_scripts_gold_sont_exploitables(self) -> None:
-        from src.jobs.build_gold import list_sql_files
+        """Chaque script doit se rendre entièrement avec les paramètres du job.
 
-        params = {
-            "catalog": "c", "schema": "s",
-            "bronze_catalog": "bc", "bronze_schema": "bs",
-            "silver_catalog": "sc", "silver_schema": "ss",
-            "date_from": "2026-03-30", "seuil_conformite": "0.5",
-            "company_predicate": "1 = 1",
-        }
+        Les paramètres sont construits par le job lui-même, jamais recopiés
+        ici : un nouveau placeholder oublié dans ``build_sql_params`` doit faire
+        échouer ce test, pas passer inaperçu jusqu'à l'exécution en production.
+        """
+        from src.jobs.build_gold import build_arg_parser, build_sql_params, list_sql_files
+
+        params = build_sql_params(build_arg_parser().parse_args([]))
         fichiers = list_sql_files()
         assert len(fichiers) >= 9, "Le modèle gold doit compter au moins 9 scripts."
         for fichier in fichiers:

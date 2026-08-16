@@ -6,8 +6,21 @@
 -- (bandeau « Qualité des données ») et sert de garde-fou au job : le job échoue
 -- si un contrôle de sévérité ERREUR est en anomalie.
 --
+-- RÈGLE D'ATTRIBUTION DES SÉVÉRITÉS
+--   ERREUR sur une INCOHÉRENCE INTERNE — si elle se produit, le calcul lui-même
+--          est faux et aucun chiffre n'est exploitable. Blocage inconditionnel.
+--   ERREUR sur une COUVERTURE INSUFFISANTE — la qualité de la source dégrade le
+--          modèle au-delà d'un seuil de matérialité paramétrable. Blocage
+--          proportionné : quelques références marginales absentes du référentiel
+--          ne justifient pas d'interdire toute l'analyse, un tiers du volume si.
+--   ALERTE sur une ANOMALIE DE SOURCE — signalée, visible dans l'application,
+--          mais non bloquante : le modèle reste exploitable et l'utilisateur est
+--          informé de sa limite.
+--
 -- Grain : 1 ligne par contrôle. Colonnes stables → consommable par une alerte
 -- Databricks SQL ou un job de monitoring.
+--
+-- Placeholder supplémentaire : {seuil_dq_pct} — matérialité, en % (défaut 5).
 -- =============================================================================
 
 CREATE OR REPLACE TABLE {catalog}.{schema}.dq_controles
@@ -45,14 +58,30 @@ WITH controles AS (
 
     UNION ALL
 
-    -- 3. Articles présents dans les mouvements mais absents du référentiel :
-    --    programme et catégorie inconnus → lignes non filtrables dans l'app.
+    -- 3. Articles présents dans les mouvements mais absents du référentiel.
+    --    Non bloquant : le modèle les conserve avec programme et catégorie
+    --    « NON RENSEIGNE », donc visibles et filtrables. Leur impact financier
+    --    est en revanche compté pour 0 €, faute de coût standard.
+    --    Le détail par référence est dans dq_articles_hors_referentiel.
     SELECT
-        'article_hors_referentiel', 'ERREUR', 'Référentiel',
+        'article_hors_referentiel', 'ALERTE', 'Référentiel',
         COUNT(DISTINCT child_itemid), 0,
-        'Composants mouvementés absents de dim_article : programme et catégorie inconnus.'
+        'Composants mouvementés absents de dim_article : programme, catégorie et coût inconnus. Détail dans dq_articles_hors_referentiel.'
     FROM {catalog}.{schema}.fact_ecart_backflush
     WHERE child_name IS NULL
+
+    UNION ALL
+
+    -- 3 bis. MATÉRIALITÉ du point précédent — celui-ci bloque.
+    --    Quelques références marginales absentes du référentiel ne justifient
+    --    pas d'interdire l'analyse ; au-delà du seuil, le modèle ne décrit plus
+    --    la réalité et les classements deviennent trompeurs.
+    SELECT
+        'couverture_referentiel', 'ERREUR', 'Référentiel',
+        CAST(ROUND(100.0 * COUNT_IF(child_name IS NULL) / NULLIF(COUNT(*), 0)) AS BIGINT),
+        CAST({seuil_dq_pct} AS BIGINT),
+        'Part des lignes dont le composant est absent du référentiel article, en %. Au-delà du seuil, les classements et la valorisation ne sont plus fiables.'
+    FROM {catalog}.{schema}.fact_ecart_backflush
 
     UNION ALL
 
@@ -79,13 +108,31 @@ WITH controles AS (
     -- 6. Parents produits sans aucune nomenclature active : leur consommation
     --    théorique vaut 0, donc aucun écart n'est calculable pour eux.
     SELECT
-        'parent_produit_sans_bom', 'ERREUR', 'Nomenclature',
+        'parent_produit_sans_bom', 'ALERTE', 'Nomenclature',
         COUNT(DISTINCT p.parent_itemid), 0,
-        'Articles parents produits sans nomenclature active : aucun écart calculable.'
+        'Articles parents produits sans nomenclature active : aucun écart calculable pour eux.'
     FROM {catalog}.{schema}.fact_production_parent AS p
     LEFT JOIN (SELECT DISTINCT parent_itemid FROM {catalog}.{schema}.dim_nomenclature) AS n
       ON n.parent_itemid = p.parent_itemid
     WHERE n.parent_itemid IS NULL
+
+    UNION ALL
+
+    -- 6 bis. MATÉRIALITÉ du point précédent — celui-ci bloque.
+    --    Mesurée en QUANTITÉ produite, non en nombre d'articles : dix références
+    --    de prototype sans nomenclature ne pèsent rien, une seule référence de
+    --    grande série pèse tout.
+    SELECT
+        'couverture_nomenclature', 'ERREUR', 'Nomenclature',
+        CAST(ROUND(
+            100.0 * SUM(CASE WHEN n.parent_itemid IS NULL THEN p.qty_produite ELSE 0 END)
+                  / NULLIF(SUM(p.qty_produite), 0)
+        ) AS BIGINT),
+        CAST({seuil_dq_pct} AS BIGINT),
+        'Part de la production, en %, dont le parent n''a aucune nomenclature active. Cette production est invisible du calcul d''écart.'
+    FROM {catalog}.{schema}.fact_production_parent AS p
+    LEFT JOIN (SELECT DISTINCT parent_itemid FROM {catalog}.{schema}.dim_nomenclature) AS n
+      ON n.parent_itemid = p.parent_itemid
 
     UNION ALL
 
