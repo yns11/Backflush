@@ -11,11 +11,44 @@ produit qu'une empreinte non sensible de la configuration.
 
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 from pathlib import Path
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+#: Variables que la plateforme injecte lorsqu'une ressource « postgres » est
+#: attachée à l'application, plus l'échappatoire de développement local.
+#:
+#: ⚠️ L'injection a lieu à la CRÉATION DU DÉPLOIEMENT, pas au démarrage du
+#: conteneur : attacher la ressource sans redéployer laisse l'application sans
+#: aucune de ces variables. C'est le piège que ce diagnostic sert à révéler.
+VARIABLES_LAKEBASE: tuple[str, ...] = (
+    "PGHOST",
+    "PGPORT",
+    "PGDATABASE",
+    "PGUSER",
+    "PGSSLMODE",
+    "LAKEBASE_ENDPOINT",
+    "PGPASSWORD",
+    "LAKEBASE_PG_URL",
+)
+
+
+def diagnostic_environnement() -> dict[str, list[str]]:
+    """Liste les variables Lakebase présentes et absentes — **noms seuls**.
+
+    Aucune valeur n'est retournée : ``PGPASSWORD`` et ``LAKEBASE_PG_URL`` sont
+    des secrets, et ce diagnostic finit dans les journaux et dans
+    ``/api/health``. Savoir *quelles* variables manquent suffit à trancher entre
+    « ressource non attachée » et « déploiement antérieur à l'attachement ».
+    """
+    presentes = [nom for nom in VARIABLES_LAKEBASE if os.environ.get(nom)]
+    return {
+        "presentes": presentes,
+        "absentes": [nom for nom in VARIABLES_LAKEBASE if nom not in presentes],
+    }
 
 
 class Settings(BaseSettings):

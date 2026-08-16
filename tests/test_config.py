@@ -7,7 +7,11 @@ qui perd sa connexion au bout d'une heure — d'où ces tests.
 
 from __future__ import annotations
 
-from app.server.core.config import Settings
+from app.server.core.config import (
+    VARIABLES_LAKEBASE,
+    Settings,
+    diagnostic_environnement,
+)
 
 
 def _settings(**surcharges) -> Settings:
@@ -82,3 +86,40 @@ class TestResume:
     def test_le_resume_annonce_le_mode(self) -> None:
         resume = _settings(pghost="h", lakebase_endpoint="projects/p/branches/b/endpoints/e").resume()
         assert resume["mode_connexion"] == "oauth_lakebase"
+
+
+class TestDiagnosticEnvironnement:
+    """Le diagnostic doit trancher entre « non attachée » et « déploiement antérieur ».
+
+    En production, l'application a démarré en mode « non_configure » sans que
+    rien n'indique laquelle des deux causes était en jeu. La liste des variables
+    injectées présentes le dit : aucune ⇒ ressource absente ou déploiement
+    antérieur à son attachement ; certaines seulement ⇒ attachement partiel.
+    """
+
+    def test_les_variables_presentes_sont_nommees(self, monkeypatch) -> None:
+        for nom in VARIABLES_LAKEBASE:
+            monkeypatch.delenv(nom, raising=False)
+        monkeypatch.setenv("PGHOST", "ep-x.database.cloud.databricks.com")
+        monkeypatch.setenv("LAKEBASE_ENDPOINT", "projects/p/branches/b/endpoints/e")
+
+        diagnostic = diagnostic_environnement()
+
+        assert diagnostic["presentes"] == ["PGHOST", "LAKEBASE_ENDPOINT"]
+        assert "PGUSER" in diagnostic["absentes"]
+
+    def test_aucune_valeur_n_est_divulguee(self, monkeypatch) -> None:
+        """Le diagnostic finit dans les journaux et dans /api/health."""
+        monkeypatch.setenv("PGPASSWORD", "JETON-TRES-SECRET")
+        monkeypatch.setenv("LAKEBASE_PG_URL", "postgresql://u:motdepasse@hote/db")
+
+        rendu = str(diagnostic_environnement())
+
+        assert "JETON-TRES-SECRET" not in rendu
+        assert "motdepasse" not in rendu
+        assert "PGPASSWORD" in rendu, "Le nom, lui, doit bien apparaître."
+
+    def test_une_variable_vide_compte_comme_absente(self, monkeypatch) -> None:
+        """Une variable définie mais vide ne configure rien."""
+        monkeypatch.setenv("PGHOST", "")
+        assert "PGHOST" in diagnostic_environnement()["absentes"]

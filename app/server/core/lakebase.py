@@ -28,7 +28,7 @@ from psycopg.rows import dict_row
 from psycopg.types.numeric import FloatLoader
 from psycopg_pool import ConnectionPool
 
-from app.server.core.config import Settings
+from app.server.core.config import Settings, diagnostic_environnement
 from app.server.core.errors import ConfigurationError, DonneesIndisponiblesError
 
 LOGGER = logging.getLogger("backflush.lakebase")
@@ -77,7 +77,24 @@ class LakebasePool:
         """
         settings = self._settings
         if not settings.base_de_donnees_configuree:
-            LOGGER.warning("Lakebase non configurée : les routes de données répondront 503.")
+            # Le diagnostic est journalisé ici, et non laissé à la charge de
+            # l'exploitant : « non configurée » sans plus de détail oblige à
+            # aller inspecter l'application à la main, alors que la liste des
+            # variables absentes tranche immédiatement entre les deux causes.
+            diagnostic = diagnostic_environnement()
+            LOGGER.warning(
+                "Lakebase non configurée : les routes de données répondront 503. "
+                "Variables injectées présentes : %s ; absentes : %s. "
+                "Deux causes possibles : (1) la ressource « postgres » n'est pas "
+                "attachée à l'application — vérifier avec « databricks apps get "
+                "<application> -o json » le tableau resources ; (2) elle l'est, "
+                "mais le déploiement en cours lui est ANTÉRIEUR — les variables "
+                "sont injectées à la création du déploiement, un simple "
+                "redémarrage ne suffit pas : relancer « databricks bundle run "
+                "backflush_analytics ».",
+                ", ".join(diagnostic["presentes"]) or "aucune",
+                ", ".join(diagnostic["absentes"]),
+            )
             return
 
         mode = settings.mode_connexion
@@ -163,7 +180,13 @@ class LakebasePool:
     def ping(self) -> dict[str, Any]:
         """Teste la connexion et retourne un diagnostic exploitable par /api/health."""
         if self._pool is None:
-            return {"statut": "non_configure", "detail": "Aucune ressource Lakebase attachée."}
+            return {
+                "statut": "non_configure",
+                "detail": "Aucune ressource Lakebase attachée.",
+                # Exposé pour que /api/health suffise au diagnostic, sans avoir
+                # à corréler avec les journaux. Noms de variables uniquement.
+                **diagnostic_environnement(),
+            }
         try:
             with self.connection() as conn, conn.cursor() as cur:
                 cur.execute("SELECT 1 AS ok")

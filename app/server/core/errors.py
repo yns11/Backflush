@@ -28,7 +28,8 @@ class ConfigurationError(BackflushError):
     status_code = 503
     message = (
         "La base Lakebase n'est pas configurée pour cette instance. "
-        "Vérifiez la ressource « database » de l'application."
+        "Vérifiez la ressource « postgres » de l'application, puis "
+        "consultez /api/health : il indique quelles variables manquent."
     )
 
 

@@ -37,8 +37,9 @@ export function App() {
               <EtatErreur erreur={options.error} onReessayer={() => void options.refetch()} />
               {options.error instanceof ErreurApi && options.error.estIndisponibilite && (
                 <p className="attenue" style={{ textAlign: 'center' }}>
-                  Vérifiez que la ressource « database » est attachée à l'application et que le job
-                  d'ingestion a bien publié le schéma dans Lakebase.
+                  Vérifiez que la ressource « postgres » est attachée à l'application et que le job
+                  d'ingestion a bien publié le schéma dans Lakebase. Le détail du diagnostic est
+                  disponible sur <code>/api/health</code>.
                 </p>
               )}
             </div>
