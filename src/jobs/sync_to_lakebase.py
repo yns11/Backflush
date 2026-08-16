@@ -363,6 +363,28 @@ def _copy_rows(
     return written
 
 
+def normaliser_roles(bruts: Iterable[str]) -> list[str]:
+    """Nettoie la liste des rôles Postgres à qui rendre le SELECT.
+
+    Le paramètre ``--app-role`` est alimenté par une variable de bundle dont la
+    valeur par défaut est la chaîne vide : lorsque le principal de service de
+    l'application n'est pas renseigné, ``argparse`` reçoit donc ``[""]`` et non
+    une liste vide. Sans ce nettoyage, ``pgsql.Identifier("")`` produit
+    ``GRANT SELECT ON "backflush"."meta_ingestion" TO ""``, que Postgres rejette
+    par ``zero-length delimited identifier`` — et la publication entière échoue
+    pour un paramètre simplement non renseigné.
+
+    Les doublons sont éliminés en conservant l'ordre : répéter un GRANT n'est
+    pas faux, mais le journal reste lisible.
+    """
+    vus: dict[str, None] = {}
+    for brut in bruts:
+        role = (brut or "").strip()
+        if role:
+            vus.setdefault(role, None)
+    return list(vus)
+
+
 def _swap(
     conn: psycopg.Connection,
     table: Table,
@@ -523,7 +545,17 @@ def run(spark, args: argparse.Namespace) -> dict[str, int]:
     # Lakebase porte un client_id de la forme « 1a2b-... », qui n'est pas un
     # identifiant SQL nu. psycopg.sql.Identifier le met entre guillemets de façon
     # sûre — c'est la protection, pas une validation par expression régulière.
-    roles = list(args.app_roles)
+    # Seules les valeurs vides sont écartées : elles ne désignent aucun rôle.
+    roles = normaliser_roles(args.app_roles)
+    if not roles:
+        LOGGER.warning(
+            "Aucun rôle applicatif fourni (--app-role) : les tables publiées ne "
+            "recevront aucun GRANT. Renseignez la variable de bundle "
+            "app_service_principal, ou accordez les droits à la main "
+            "(voir docs/DEPLOIEMENT.md §5 : GRANT USAGE ON SCHEMA %s ; "
+            "GRANT SELECT ON ALL TABLES IN SCHEMA %s).",
+            pg_schema, pg_schema,
+        )
     tables = select_tables(args.tables)
 
     results: dict[str, int] = {}
@@ -540,13 +572,25 @@ def run(spark, args: argparse.Namespace) -> dict[str, int]:
                 )
                 status, error_message = "SUCCES", None
             except Exception as exc:
-                conn.rollback()
-                record_ingestion(
-                    conn, pg_schema, table_name=table.name, source_table=table.source,
-                    row_count=-1, started_at=started_at, ended_at=datetime.now(UTC),
-                    status="ECHEC", error_message=str(exc)[:2000], run_id=args.run_id, roles=roles,
-                )
                 LOGGER.exception("[%s] échec de la publication", table.name)
+                # La journalisation de l'échec ne doit jamais remplacer l'échec
+                # lui-même : si elle échoue à son tour (connexion perdue, droits
+                # manquants), c'est SON erreur qui remonterait, et la cause
+                # réelle disparaîtrait du rapport d'exécution.
+                try:
+                    conn.rollback()
+                    record_ingestion(
+                        conn, pg_schema, table_name=table.name, source_table=table.source,
+                        row_count=-1, started_at=started_at, ended_at=datetime.now(UTC),
+                        status="ECHEC", error_message=str(exc)[:2000],
+                        run_id=args.run_id, roles=roles,
+                    )
+                except Exception:
+                    LOGGER.exception(
+                        "[%s] le journal d'ingestion n'a pas pu être mis à jour ; "
+                        "l'erreur d'origine reste celle rapportée ci-dessus.",
+                        table.name,
+                    )
                 raise
 
             record_ingestion(

@@ -294,6 +294,13 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA backflush GRANT SELECT ON TABLES TO "<client_
 Reporter ensuite ce `client_id` dans la variable `app_service_principal` du
 bundle, pour que chaque bascule réattribue le droit.
 
+> Laisser `app_service_principal` vide ne fait pas échouer le job : celui-ci
+> journalise un avertissement et n'émet aucun `GRANT`. Mais les tables publiées
+> ne sont alors lisibles que par leur propriétaire — l'application répondra
+> `permission denied for table …`. Les `GRANT` ci-dessus restent donc à faire à
+> la main tant que la variable n'est pas renseignée, **et à refaire après chaque
+> exécution du job**, puisque la bascule recrée les tables.
+
 ## 6. Vérifier l'application
 
 ```bash
@@ -319,6 +326,7 @@ Puis, sur l'URL de l'application :
 | `permission denied for schema backflush (42501)` | Le schéma appartient au job (exécuté sous votre identité), pas au principal de service, qui n'a que `CAN_CONNECT_AND_CREATE` | Faire le `GRANT` de l'étape 5 — obligatoire, la ressource seule ne suffit pas |
 | Journal « Connexion par mot de passe injecté » | `LAKEBASE_ENDPOINT` absent : la ressource n'a fourni qu'un `PGPASSWORD` | Fonctionnel, mais la rotation dépend de la plateforme. Définir `LAKEBASE_ENDPOINT` pour que l'application gère son propre jeton |
 | `permission denied for table …` | Le `GRANT` de l'étape 5 n'a pas été fait, ou `app_service_principal` est vide dans le bundle | Refaire l'étape 5, redéployer, relancer le job |
+| `zero-length delimited identifier` sur `GRANT … TO ""` | Version antérieure du job : `app_service_principal` vide était transmis tel quel comme nom de rôle | Corrigé — les rôles vides sont écartés. Mettre le bundle à jour et relancer |
 | Interface absente, API fonctionnelle | `scripts/build_frontend.sh` non exécuté avant le déploiement, ou bloc `sync.include` retiré de `databricks.yml` | Compiler, vérifier que `sync.include` couvre `app/server/static/**`, redéployer |
 | L'application plante au démarrage | `psycopg` absent des dépendances | Vérifier `app/requirements.txt` |
 | Première requête lente après une période creuse | Instance Lakebase mise à l'échelle zéro | Attendu ; le pre-ping du pool absorbe le réveil |

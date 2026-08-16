@@ -90,6 +90,8 @@ variables:
     description: >-
       Rôle Postgres du principal de service de l'application, qui reçoit SELECT
       après chaque bascule de table. En général le client_id de l'application.
+      Laissée vide, aucun GRANT n'est émis (le job le signale) : les droits sont
+      alors à accorder à la main après chaque exécution — voir DEPLOIEMENT.md §5.
     default: ""
 
   notification_email:
