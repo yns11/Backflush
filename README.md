@@ -74,6 +74,7 @@ Les 20 axes d'amélioration priorisés sont dans [`docs/AMELIORATIONS.md`](docs/
 │   └── jobs/                      Tâches Python des jobs (build gold, sync Lakebase)
 ├── app/
 │   ├── app.yaml                   Manifeste Databricks Apps
+│   ├── main.py                    Point d'entrée du conteneur (rétablit le paquet « app »)
 │   ├── requirements.txt
 │   ├── server/                    Backend FastAPI — logique métier, isolée de l'UI
 │   │   ├── core/                  config, pool Lakebase, erreurs, journalisation

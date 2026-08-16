@@ -385,6 +385,7 @@ Puis, sur l'URL de l'application :
 | Journal « Connexion par mot de passe injecté » | `LAKEBASE_ENDPOINT` absent : la ressource n'a fourni qu'un `PGPASSWORD` | Fonctionnel, mais la rotation dépend de la plateforme. Définir `LAKEBASE_ENDPOINT` pour que l'application gère son propre jeton |
 | `permission denied for table …` | Le `GRANT` de l'étape 5 n'a pas été fait, ou `app_service_principal` est vide dans le bundle | Refaire l'étape 5, redéployer, relancer le job |
 | `zero-length delimited identifier` sur `GRANT … TO ""` | Version antérieure du job : `app_service_principal` vide était transmis tel quel comme nom de rôle | Corrigé — les rôles vides sont écartés. Mettre le bundle à jour et relancer |
+| « App Not Available » et `ModuleNotFoundError: No module named 'app'` en boucle dans les journaux | Databricks Apps déploie le **contenu** de `app/` à la racine : le paquet `app` n'existe pas dans le conteneur | La commande d'`app.yaml` doit être `main:app` (et non `app.server.main:app`) ; `app/main.py` rétablit le paquet avant l'import |
 | Interface absente, API fonctionnelle | `scripts/build_frontend.sh` non exécuté avant le déploiement, ou bloc `sync.include` retiré de `databricks.yml` | Compiler, vérifier que `sync.include` couvre `app/server/static/**`, redéployer |
 | L'application plante au démarrage | `psycopg` absent des dépendances | Vérifier `app/requirements.txt` |
 | Première requête lente après une période creuse | Instance Lakebase mise à l'échelle zéro | Attendu ; le pre-ping du pool absorbe le réveil |

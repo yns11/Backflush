@@ -22,7 +22,13 @@
 
 command:
   - uvicorn
-  - app.server.main:app
+  # ⚠️ « main:app », PAS « app.server.main:app ».
+  # Databricks Apps déploie le CONTENU de ce dossier à la racine du conteneur :
+  # server/ s'y retrouve directement, et le paquet « app » n'existe plus. Le
+  # module main.py rétablit ce paquet avant d'exposer l'application — voir son
+  # en-tête. Rétablir l'ancien chemin fait échouer tous les workers au démarrage
+  # sur « ModuleNotFoundError: No module named 'app' ».
+  - main:app
   - --host
   - 0.0.0.0
   - --port
