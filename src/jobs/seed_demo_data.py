@@ -454,7 +454,7 @@ def write(conn: psycopg.Connection, dataset: dict[str, list[tuple[Any, ...]]], p
         LOGGER.info("%-32s %8d ligne(s)", table.name, len(rows))
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None) -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)-7s %(message)s", stream=sys.stdout)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--weeks", type=int, default=26, help="Nombre de semaines d'historique.")
@@ -464,15 +464,23 @@ def main(argv: list[str] | None = None) -> int:
 
     url = os.getenv("LAKEBASE_PG_URL")
     if not url:
-        raise SystemExit("LAKEBASE_PG_URL doit être défini (Postgres de développement).")
+        raise RuntimeError("LAKEBASE_PG_URL doit être défini (Postgres de développement).")
 
     LOGGER.info("Génération de %d semaines de données de démonstration…", args.weeks)
     dataset = build_dataset(args.weeks, args.seed)
     with psycopg.connect(url) as conn:
         write(conn, dataset, args.pg_schema)
     LOGGER.info("Jeu de démonstration prêt.")
-    return 0
 
 
 if __name__ == "__main__":  # pragma: no cover
-    raise SystemExit(main())
+    # `main()` est appelée directement, jamais via `raise SystemExit(main())`.
+    #
+    # Une tâche Databricks évalue ce fichier dans un noyau IPython : une
+    # SystemExit y remonte comme une exception ordinaire et fait échouer la
+    # tâche — MÊME avec le code 0. Le job affichait donc « construit avec
+    # succès » puis « Workload failed » dans la foulée.
+    #
+    # Les échecs réels lèvent des exceptions, qui produisent de toute façon un
+    # code de retour non nul en ligne de commande : rien n'est perdu.
+    main()

@@ -320,7 +320,7 @@ def _check_data_quality(spark, params: dict[str, str], *, fail_on_error: bool) -
         )
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None) -> None:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)-7s %(name)s :: %(message)s",
@@ -335,8 +335,16 @@ def main(argv: list[str] | None = None) -> int:
     spark = SparkSession.builder.getOrCreate()
     run(spark, args)
     LOGGER.info("Modèle gold construit avec succès.")
-    return 0
 
 
 if __name__ == "__main__":  # pragma: no cover
-    raise SystemExit(main())
+    # `main()` est appelée directement, jamais via `raise SystemExit(main())`.
+    #
+    # Une tâche Databricks évalue ce fichier dans un noyau IPython : une
+    # SystemExit y remonte comme une exception ordinaire et fait échouer la
+    # tâche — MÊME avec le code 0. Le job affichait donc « construit avec
+    # succès » puis « Workload failed » dans la foulée.
+    #
+    # Les échecs réels lèvent des exceptions, qui produisent de toute façon un
+    # code de retour non nul en ligne de commande : rien n'est perdu.
+    main()

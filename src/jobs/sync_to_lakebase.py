@@ -120,7 +120,7 @@ def connect(args: argparse.Namespace) -> psycopg.Connection:
         return psycopg.connect(url, autocommit=False)
 
     if not (args.pg_host and args.lakebase_endpoint):
-        raise SystemExit(
+        raise RuntimeError(
             "Connexion impossible : définissez LAKEBASE_PG_URL, ou passez "
             "--pg-host et --lakebase-endpoint."
         )
@@ -393,7 +393,7 @@ def select_tables(names: str) -> tuple[Table, ...]:
     known = {table.name for table in TABLES}
     unknown = wanted - known
     if unknown:
-        raise SystemExit(f"Tables inconnues : {', '.join(sorted(unknown))}")
+        raise RuntimeError(f"Tables inconnues : {', '.join(sorted(unknown))}")
     return tuple(table for table in TABLES if table.name in wanted)
 
 
@@ -461,7 +461,7 @@ def ensure_extensions(conn: psycopg.Connection) -> bool:
         return False
 
 
-def main(argv: Iterable[str] | None = None) -> int:
+def main(argv: Iterable[str] | None = None) -> None:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)-7s %(name)s :: %(message)s",
@@ -475,8 +475,16 @@ def main(argv: Iterable[str] | None = None) -> int:
     results = run(spark, args)
     total: Any = sum(results.values())
     LOGGER.info("Publication terminée : %d table(s), %s ligne(s).", len(results), f"{total:,}")
-    return 0
 
 
 if __name__ == "__main__":  # pragma: no cover
-    raise SystemExit(main())
+    # `main()` est appelée directement, jamais via `raise SystemExit(main())`.
+    #
+    # Une tâche Databricks évalue ce fichier dans un noyau IPython : une
+    # SystemExit y remonte comme une exception ordinaire et fait échouer la
+    # tâche — MÊME avec le code 0. Le job affichait donc « construit avec
+    # succès » puis « Workload failed » dans la foulée.
+    #
+    # Les échecs réels lèvent des exceptions, qui produisent de toute façon un
+    # code de retour non nul en ligne de commande : rien n'est perdu.
+    main()
