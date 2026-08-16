@@ -17,8 +17,13 @@
 -- =============================================================================
 
 -- --- Mouvements de stock -----------------------------------------------------
+-- SUPPRESSIONS LOGIQUES : la couche bronze conserve les lignes supprimées dans
+-- l'ERP, marquées par `IsDelete` et `deleted_at`. Les compter reviendrait à
+-- intégrer au calcul des mouvements qui n'existent plus — un OF annulé
+-- produirait un écart permanent et parfaitement inexplicable en atelier.
+-- Le volume exclu est mesuré par le contrôle `mouvements_supprimes_exclus`.
 CREATE OR REPLACE VIEW {catalog}.{schema}.v_src_invent_trans
-COMMENT 'Mouvements de stock normalisés (InventTrans). Source d''autorité pour les quantités et la date physique.'
+COMMENT 'Mouvements de stock normalisés (InventTrans), hors lignes supprimées. Source d''autorité pour les quantités et la date physique.'
 AS
 SELECT
     CAST(it.inventtransorigin AS BIGINT)  AS transorigin_id,
@@ -30,6 +35,8 @@ FROM {bronze_catalog}.{bronze_schema}.invent_trans AS it
 WHERE it.datephysical IS NOT NULL      -- un mouvement non validé physiquement n'est pas consommé
   AND it.qty IS NOT NULL
   AND it.qty <> 0
+  AND NOT COALESCE(it.IsDelete, FALSE)
+  AND it.deleted_at IS NULL
   AND ({company_predicate});
 
 -- --- Origine des mouvements --------------------------------------------------
@@ -43,18 +50,27 @@ SELECT
     CAST(ito.itemid            AS STRING) AS item_id,
     CAST(ito.dataareaid        AS STRING) AS company
 FROM {bronze_catalog}.{bronze_schema}.invent_trans_origin AS ito
-WHERE ({company_predicate});
+WHERE NOT COALESCE(ito.IsDelete, FALSE)
+  AND ({company_predicate});
 
 -- --- Ordres de fabrication ---------------------------------------------------
+-- `bomid` et `finisheddate` ne servent pas au calcul hebdomadaire actuel, mais
+-- sont exposés ici : ce sont les deux colonnes qui rendront possible le
+-- rapprochement par ordre de fabrication (cf. docs/AMELIORATIONS.md §1), lequel
+-- supprimerait le biais de calage des OF à cheval sur deux semaines.
 CREATE OR REPLACE VIEW {catalog}.{schema}.v_src_prod_table
-COMMENT 'Ordres de fabrication (ProdTable) : rattache un OF à son article parent.'
+COMMENT 'Ordres de fabrication (ProdTable) : rattache un OF à son article parent, hors OF supprimés.'
 AS
 SELECT
-    CAST(pt.prodid     AS STRING) AS prod_id,
-    CAST(pt.itemid     AS STRING) AS parent_itemid,
-    CAST(pt.dataareaid AS STRING) AS company
+    CAST(pt.prodid       AS STRING)    AS prod_id,
+    CAST(pt.itemid       AS STRING)    AS parent_itemid,
+    CAST(pt.bomid        AS STRING)    AS bom_id,
+    CAST(pt.prodstatus   AS BIGINT)    AS prod_statut,
+    CAST(pt.finisheddate AS TIMESTAMP) AS date_cloture,
+    CAST(pt.dataareaid   AS STRING)    AS company
 FROM {bronze_catalog}.{bronze_schema}.prod_table AS pt
-WHERE ({company_predicate});
+WHERE NOT COALESCE(pt.IsDelete, FALSE)
+  AND ({company_predicate});
 
 -- --- Référentiel article -----------------------------------------------------
 -- La table silver ne porte PAS de colonne de snapshot par ligne : elle expose

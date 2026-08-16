@@ -88,11 +88,16 @@ SQL_DIR = RACINE / "src" / "sql" / "gold"
 COLONNES_SOURCE: dict[str, tuple[str, ...]] = {
     "bronze.invent_trans": (
         "inventtransorigin", "itemid", "qty", "datephysical", "dataareaid",
+        "isdelete", "deleted_at",
     ),
     "bronze.invent_trans_origin": (
         "recid", "referencecategory", "referenceid", "itemid", "dataareaid",
+        "isdelete",
     ),
-    "bronze.prod_table": ("prodid", "itemid", "dataareaid"),
+    "bronze.prod_table": (
+        "prodid", "itemid", "bomid", "prodstatus", "finisheddate", "dataareaid",
+        "isdelete",
+    ),
     "silver.silver_bom": (
         "bomid", "parent_itemid", "bom_version_name", "statut", "child_itemid",
         "child_qty", "child_unitid", "parent_physical_stock", "child_physical_stock",

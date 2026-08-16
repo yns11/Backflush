@@ -50,8 +50,22 @@ signal recherché.
 **La correction.** Introduire un grain `prod_id × composant`, en agrégeant tous
 les mouvements d'un OF quelle que soit leur date, et rattacher l'OF à une semaine
 par sa **date de clôture**. La maille hebdomadaire actuelle devient une
-agrégation de ce grain, pas la maille de calcul. `invent_trans_origin.reference_id`
-porte déjà le `ProdId` des deux côtés : l'information est disponible.
+agrégation de ce grain, pas la maille de calcul.
+
+**Toutes les colonnes nécessaires sont déjà disponibles** — et désormais
+exposées par `v_src_prod_table` :
+
+| Colonne | Rôle |
+|---|---|
+| `invent_trans_origin.referenceid` | Porte le `ProdId` des deux côtés du calcul |
+| `prod_table.finisheddate` | Rattache l'OF à une semaine, sans ambiguïté |
+| `prod_table.prodstatus` | Ne retenir que les OF clôturés, dont l'écart est définitif |
+| `prod_table.bomid` | **La version de nomenclature réellement utilisée par l'OF** |
+
+Ce dernier point résout au passage l'amélioration n° 3 pour la nomenclature :
+plus besoin de choisir une version active de façon déterministe mais arbitraire,
+l'OF dit laquelle il a consommée. Le contrôle `bom_multi_version` deviendrait
+sans objet.
 
 **Vérification.** Comparer, sur un trimestre, l'écart hebdomadaire actuel et
 l'écart par OF ré-agrégé. La différence mesure exactement le biais de calage.

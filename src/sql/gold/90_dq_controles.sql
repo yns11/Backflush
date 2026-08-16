@@ -111,7 +111,21 @@ WITH controles AS (
 
     UNION ALL
 
-    -- 9. Réconciliation agrégat / détail : tolérance 0,01 € sur le total.
+    -- 9. Mouvements supprimés dans l'ERP et écartés du calcul.
+    --    Volume attendu faible. Une valeur élevée signale des annulations
+    --    massives d'ordres de fabrication, à instruire avant de conclure quoi
+    --    que ce soit sur les écarts de la période.
+    SELECT
+        'mouvements_supprimes_exclus', 'INFO', 'Source',
+        COUNT(*), 0,
+        'Mouvements marqués supprimés dans la source, exclus du modèle.'
+    FROM {bronze_catalog}.{bronze_schema}.invent_trans
+    WHERE datephysical >= DATE '{date_from}'
+      AND (COALESCE(IsDelete, FALSE) OR deleted_at IS NOT NULL)
+
+    UNION ALL
+
+    -- 10. Réconciliation agrégat / détail : tolérance 0,01 € sur le total.
     SELECT
         'reconciliation_agg_detail', 'ERREUR', 'Cohérence',
         CAST(
