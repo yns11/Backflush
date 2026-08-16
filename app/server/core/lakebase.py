@@ -2,10 +2,12 @@
 
 Trois contraintes propres à Lakebase dictent ce module :
 
-1. **Le jeton OAuth expire au bout d'une heure.** Un pool classique ouvrirait
-   des connexions avec un mot de passe périmé. Le mot de passe est donc relu
-   dans un dictionnaire mutable à chaque ouverture de connexion, et un fil
-   d'arrière-plan y écrit un jeton frais toutes les 30 minutes.
+1. **Le jeton OAuth expire au bout d'une heure.** Un mot de passe transmis au
+   pool y reste figé pour toute sa durée de vie : passé une heure, chaque
+   nouvelle connexion est refusée (« OAuth: User is not authorized »), et comme
+   le pool recycle ses connexions, l'application cesse de servir. Le jeton est
+   donc posé à **chaque connexion physique**, par une classe de connexion
+   dédiée, et non écrit une fois pour toutes dans les paramètres du pool.
 2. **La mise à l'échelle à zéro** réveille l'instance à la première connexion :
    ``check`` (pre-ping) évite de servir une connexion morte à une requête HTTP.
 3. **L'application est en lecture seule.** Chaque connexion est configurée en
@@ -18,6 +20,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
@@ -63,9 +66,12 @@ class LakebasePool:
         self._settings = settings
         self._pool: ConnectionPool | None = None
         self._kwargs: dict[str, Any] = {}
-        self._stop = threading.Event()
-        self._refresher: threading.Thread | None = None
         self._workspace: Any | None = None
+        # Jeton mis en cache, régénéré à l'usage. Le verrou évite qu'un pic de
+        # connexions simultanées déclenche autant d'appels à l'API d'identité.
+        self._verrou = threading.Lock()
+        self._jeton: str | None = None
+        self._jeton_obtenu_le: float = 0.0
 
     # -- Cycle de vie ------------------------------------------------------
     def open(self) -> None:
@@ -98,6 +104,7 @@ class LakebasePool:
             return
 
         mode = settings.mode_connexion
+        classe_connexion: type[psycopg.Connection] = psycopg.Connection
         if mode == "url_directe":
             conninfo = settings.lakebase_pg_url or ""
             self._kwargs = {}
@@ -111,10 +118,11 @@ class LakebasePool:
                 "sslmode": "require",
             }
             if mode == "oauth_lakebase":
-                # L'application génère et renouvelle elle-même le jeton :
-                # la validité de la connexion ne dépend d'aucun redémarrage.
-                self._kwargs["password"] = self._generate_token()
-                self._start_refresher()
+                # Le mot de passe n'est PAS figé ici : il est posé à chaque
+                # connexion physique par la classe ci-dessous. Un jeton écrit
+                # dans les paramètres du pool serait figé à l'ouverture, et
+                # toute connexion ouverte après son expiration échouerait.
+                classe_connexion = self._classe_connexion()
             else:
                 # La ressource « postgres » de l'application a injecté un
                 # identifiant. Il fonctionne, mais sa rotation appartient à la
@@ -131,10 +139,11 @@ class LakebasePool:
             conninfo=conninfo,
             kwargs={**self._kwargs, "row_factory": dict_row} if self._kwargs
             else {"row_factory": dict_row},
+            connection_class=classe_connexion,
             min_size=settings.pool_min_size,
             max_size=settings.pool_max_size,
             timeout=settings.pool_timeout_s,
-            max_lifetime=1_800,          # < durée de vie du jeton : les connexions se renouvellent
+            max_lifetime=1_800,          # recyclage régulier : aucune connexion ne vieillit indéfiniment
             check=ConnectionPool.check_connection,   # pre-ping : détecte le réveil après scale-to-zero
             configure=self._configure,
             open=False,
@@ -147,9 +156,6 @@ class LakebasePool:
         )
 
     def close(self) -> None:
-        self._stop.set()
-        if self._refresher is not None:
-            self._refresher.join(timeout=2)
         if self._pool is not None:
             self._pool.close()
             self._pool = None
@@ -194,6 +200,52 @@ class LakebasePool:
             return {"statut": "ok"}
         except DonneesIndisponiblesError as exc:
             return {"statut": "indisponible", "detail": exc.message}
+
+    # -- Jeton -------------------------------------------------------------
+    def _classe_connexion(self) -> type[psycopg.Connection]:
+        """Classe de connexion qui pose un jeton FRAIS à chaque ouverture.
+
+        C'est le seul point d'injection fiable. Le pool résout ses paramètres
+        de connexion à chaque ouverture physique, mais un mot de passe écrit
+        dans ces paramètres à l'ouverture du pool y reste figé : après une
+        heure, toute nouvelle connexion est refusée (« OAuth: User is not
+        authorized »), et comme le pool recycle ses connexions, l'application
+        finit par ne plus rien pouvoir servir.
+
+        La classe gère aussi le refus d'un jeton mis en cache : elle l'invalide
+        et retente **une** fois. L'application se rétablit donc seule après une
+        expiration prématurée ou une révocation, sans attendre un redémarrage.
+        """
+        fournir = self._jeton_courant
+        invalider = self._invalider_jeton
+
+        class ConnexionLakebase(psycopg.Connection):
+            @classmethod
+            def connect(cls, conninfo: str = "", **kwargs: Any) -> Any:
+                try:
+                    return super().connect(conninfo, password=fournir(), **kwargs)
+                except psycopg.OperationalError as exc:
+                    if "not authorized" not in str(exc).lower():
+                        raise
+                    LOGGER.warning("Jeton Lakebase refusé ; régénération et nouvel essai.")
+                    invalider()
+                    return super().connect(conninfo, password=fournir(), **kwargs)
+
+        return ConnexionLakebase
+
+    def _jeton_courant(self) -> str:
+        """Retourne le jeton en cache, ou en génère un s'il a fait son temps."""
+        with self._verrou:
+            age = time.monotonic() - self._jeton_obtenu_le
+            if self._jeton is None or age >= self._settings.token_refresh_s:
+                self._jeton = self._generate_token()
+                self._jeton_obtenu_le = time.monotonic()
+                LOGGER.info("Jeton Lakebase généré (valable ~1 h).")
+            return self._jeton
+
+    def _invalider_jeton(self) -> None:
+        with self._verrou:
+            self._jeton = None
 
     # -- Interne -----------------------------------------------------------
     def _configure(self, conn: psycopg.Connection) -> None:
@@ -277,18 +329,3 @@ class LakebasePool:
             "Fournissez PGPASSWORD via la ressource « postgres » de l'application, "
             "ou relevez la version de databricks-sdk dans app/requirements.txt."
         )
-
-    def _start_refresher(self) -> None:
-        def boucle() -> None:
-            while not self._stop.wait(self._settings.token_refresh_s):
-                try:
-                    # Mutation en place : les connexions ouvertes ENSUITE par le
-                    # pool liront ce nouveau mot de passe. Les connexions déjà
-                    # établies restent valides jusqu'à max_lifetime.
-                    self._kwargs["password"] = self._generate_token()
-                    LOGGER.info("Jeton Lakebase renouvelé.")
-                except Exception:
-                    LOGGER.exception("Échec du renouvellement du jeton Lakebase ; nouvel essai plus tard.")
-
-        self._refresher = threading.Thread(target=boucle, name="lakebase-token", daemon=True)
-        self._refresher.start()

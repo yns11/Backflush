@@ -63,7 +63,7 @@ def test_le_bundle_ne_porte_aucune_anomalie_connue() -> None:
 
 ---
 
-## 2. Databricks Apps — les quatre pièges structurels
+## 2. Databricks Apps — les cinq pièges structurels
 
 ### 2.1 Le paquet racine n'existe pas dans le conteneur
 
@@ -144,7 +144,50 @@ Ce sont des **chemins de ressource complets**, pas des noms courts. Les relever
 avec `databricks postgres list-branches` / `list-databases` — le nom de la base
 est souvent tireté (`databricks-postgres`).
 
-### 2.4 Un bundle exclut ce que `.gitignore` ignore
+### 2.4 Un jeton figé à l'ouverture du pool
+
+Le jeton OAuth Lakebase vit **une heure**. Un mot de passe transmis à un pool de
+connexions y reste figé pour toute la durée de vie du pool.
+
+| | |
+|---|---|
+| **Symptôme** | tout fonctionne, puis après une période d'inactivité : `OAuth: User is not authorized` à chaque tentative, `couldn't get a connection after 10.00 sec`, 503 partout |
+| **Faux diagnostic** | droits révoqués, principal de service désautorisé, réseau |
+
+Le piège vicieux : un fil d'arrière-plan qui renouvelle le jeton **dans le
+dictionnaire lu avant la construction du pool** ne change rien. Le pool a copié
+ces paramètres. Le mécanisme existe, il est **inerte** — et invisible pendant
+toute la première heure, celle des tests de recette.
+
+Le seul point d'injection fiable est la **connexion physique** :
+
+```python
+def classe_connexion(fournir_jeton, invalider_jeton):
+    class ConnexionLakebase(psycopg.Connection):
+        @classmethod
+        def connect(cls, conninfo="", **kwargs):
+            try:
+                return super().connect(conninfo, password=fournir_jeton(), **kwargs)
+            except psycopg.OperationalError as exc:
+                if "not authorized" not in str(exc).lower():
+                    raise
+                invalider_jeton()               # jeton refusé : un seul nouvel essai
+                return super().connect(conninfo, password=fournir_jeton(), **kwargs)
+    return ConnexionLakebase
+
+pool = ConnectionPool(..., connection_class=classe_connexion(...))
+```
+
+`fournir_jeton` met le jeton en cache (verrou + horodatage) pour qu'un pic de
+connexions ne déclenche pas autant d'appels à l'API d'identité. La reprise sur
+refus rend l'application capable de se rétablir seule, sans redémarrage.
+
+**Règle générale** : tout identifiant à durée de vie limitée doit être résolu
+**au moment de l'usage**, jamais capturé dans une structure de longue vie. Le
+test qui l'atteste : ouvrir le pool, puis vérifier qu'aucun mot de passe ne
+figure dans ses paramètres.
+
+### 2.5 Un bundle exclut ce que `.gitignore` ignore
 
 | | |
 |---|---|

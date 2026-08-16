@@ -87,7 +87,9 @@ class Settings(BaseSettings):
     pool_min_size: int = 1
     pool_max_size: int = 8
     pool_timeout_s: float = 10.0
-    #: Le jeton OAuth Lakebase vit 1 h ; on le renouvelle largement avant.
+    #: Durée au bout de laquelle le jeton en cache est régénéré, à l'occasion
+    #: d'une nouvelle connexion physique. Le jeton OAuth Lakebase vit une heure :
+    #: la moitié laisse une marge confortable sans multiplier les appels.
     token_refresh_s: int = 1_800
     #: Garde-fou : toute requête dépassant ce délai est annulée côté serveur.
     statement_timeout_ms: int = 25_000
