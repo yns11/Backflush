@@ -27,14 +27,39 @@ import yaml
 
 RACINE = Path(__file__).resolve().parents[1]
 DOSSIER_APP = RACINE / "app"
+RESSOURCE_APP = RACINE / "resources" / "backflush_app.yml"
+
+
+def manifeste() -> dict:
+    return yaml.safe_load((DOSSIER_APP / "app.yaml").read_text(encoding="utf-8"))
 
 
 def cible_uvicorn() -> str:
     """Retourne la cible « module:attribut » déclarée dans app.yaml."""
-    manifeste = yaml.safe_load((DOSSIER_APP / "app.yaml").read_text(encoding="utf-8"))
-    commande = manifeste["command"]
+    commande = manifeste()["command"]
     assert commande[0] == "uvicorn", "Le manifeste ne lance plus uvicorn."
     return commande[1]
+
+
+def ressources_declarees() -> dict[str, str]:
+    """Nom → type de chaque ressource attachée à l'application par le bundle."""
+    bundle = yaml.safe_load(RESSOURCE_APP.read_text(encoding="utf-8"))
+    application = bundle["resources"]["apps"]["backflush_analytics"]
+    types = {}
+    for ressource in application["resources"]:
+        cles = [cle for cle in ressource if cle not in ("name", "description")]
+        assert len(cles) == 1, f"Ressource {ressource['name']} : type ambigu {cles}."
+        types[ressource["name"]] = cles[0]
+    return types
+
+
+def injections() -> dict[str, str]:
+    """Variable d'environnement → nom de ressource, pour chaque `valueFrom`."""
+    return {
+        entree["name"]: entree["valueFrom"]
+        for entree in manifeste()["env"]
+        if "valueFrom" in entree
+    }
 
 
 class TestManifeste:
@@ -51,6 +76,39 @@ class TestManifeste:
         fichier = DOSSIER_APP / (module.replace(".", "/") + ".py")
         assert fichier.is_file(), f"{fichier} est déclaré dans app.yaml mais absent."
         assert attribut == "app"
+
+
+class TestInjectionDesRessources:
+    """Contrat entre le bundle (qui attache) et app.yaml (qui réclame).
+
+    Une ressource attachée n'injecte pas tout d'elle-même. Pour Lakebase, la
+    plateforme fournit PGHOST/PGPORT/PGDATABASE/PGUSER/PGSSLMODE
+    automatiquement, mais **jamais LAKEBASE_ENDPOINT** : il faut le réclamer par
+    un `valueFrom`. L'oubli ne casse rien au démarrage — l'application se lance,
+    puis répond 503 sur toutes les routes de données, ce qui ressemble à s'y
+    méprendre à une ressource non attachée. D'où ce test.
+    """
+
+    def test_chaque_valueFrom_designe_une_ressource_existante(self) -> None:
+        declarees = ressources_declarees()
+        for variable, ressource in injections().items():
+            assert ressource in declarees, (
+                f"{variable} réclame la ressource « {ressource} », absente du "
+                f"bundle (déclarées : {sorted(declarees)})."
+            )
+
+    def test_le_endpoint_lakebase_est_explicitement_reclame(self) -> None:
+        noms_postgres = [
+            nom for nom, type_ in ressources_declarees().items() if type_ == "postgres"
+        ]
+        if not noms_postgres:
+            pytest.skip("Aucune ressource Lakebase attachée à l'application.")
+
+        assert injections().get("LAKEBASE_ENDPOINT") in noms_postgres, (
+            "Sans « LAKEBASE_ENDPOINT / valueFrom: <ressource postgres> », "
+            "l'application reçoit l'hôte mais aucun moyen de générer un jeton : "
+            "elle démarre et répond 503 sur toutes les routes de données."
+        )
 
 
 @pytest.fixture(scope="module")

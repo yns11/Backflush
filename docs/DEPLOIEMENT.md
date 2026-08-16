@@ -380,7 +380,13 @@ Puis, sur l'URL de l'application :
 | Symptôme | Cause la plus fréquente | Correction |
 |---|---|---|
 | `Database instance <nom> does not exist (404)` au déploiement | Clé de ressource `database` (dépréciée) au lieu de `postgres`, ou nom court au lieu d'un chemin de ressource | Utiliser `postgres` avec `branch` et `database` en chemins complets (§1) |
-| `503` sur toutes les routes de données, journal « Lakebase non configurée » | La ressource `postgres` n'est pas attachée, **ou** le déploiement en cours lui est antérieur | Lire `/api/health` : il liste les variables injectées manquantes. Aucune présente ⇒ vérifier `databricks apps get <app> -o json` (tableau `resources`), puis **recréer un déploiement** (`bundle run backflush_analytics`) : les variables sont injectées à la création du déploiement, pas au redémarrage |
+| `503` sur toutes les routes de données, journal « Lakebase non configurée » | Trois causes possibles — `/api/health` liste les variables manquantes et tranche | Voir le tableau ci-dessous |
+
+| Variables présentes dans `/api/health` | Cause | Correction |
+|---|---|---|
+| `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER` — mais **ni** `LAKEBASE_ENDPOINT` **ni** `PGPASSWORD` | `LAKEBASE_ENDPOINT` n'est **jamais** injecté automatiquement : il doit être réclamé par un `valueFrom` | Vérifier dans `app.yaml` : `- name: LAKEBASE_ENDPOINT` / `valueFrom: postgres` (verrouillé par `tests/test_demarrage_app.py`) |
+| Aucune | La ressource `postgres` n'est pas attachée | `databricks apps get <app> -o json` → tableau `resources` ; l'attacher, puis redéployer |
+| Aucune, alors que `resources` contient bien `postgres` | Le déploiement en cours est antérieur à l'attachement | Recréer un déploiement (`bundle run backflush_analytics`) : les variables sont injectées à sa création, pas au redémarrage |
 | `permission denied for schema backflush (42501)` | Le schéma appartient au job (exécuté sous votre identité), pas au principal de service, qui n'a que `CAN_CONNECT_AND_CREATE` | Faire le `GRANT` de l'étape 5 — obligatoire, la ressource seule ne suffit pas |
 | Journal « Connexion par mot de passe injecté » | `LAKEBASE_ENDPOINT` absent : la ressource n'a fourni qu'un `PGPASSWORD` | Fonctionnel, mais la rotation dépend de la plateforme. Définir `LAKEBASE_ENDPOINT` pour que l'application gère son propre jeton |
 | `permission denied for table …` | Le `GRANT` de l'étape 5 n'a pas été fait, ou `app_service_principal` est vide dans le bundle | Refaire l'étape 5, redéployer, relancer le job |
