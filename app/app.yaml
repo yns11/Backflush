@@ -1,0 +1,71 @@
+# =============================================================================
+# Manifeste Databricks Apps — backflush-analytics
+# =============================================================================
+# L'application sert à la fois l'API JSON et le bundle React compilé
+# (app/server/static). Ce bundle doit exister AVANT le déploiement :
+#     ./scripts/build_frontend.sh
+#
+# Ressources à attacher à l'application dans l'espace de travail :
+#   • database        → l'instance Lakebase contenant le schéma « backflush ».
+#                       La plateforme injecte alors PGHOST, PGPORT, PGDATABASE,
+#                       PGUSER et LAKEBASE_ENDPOINT.
+#   • serving-endpoint → le modèle de fondation utilisé par l'assistant IA.
+#
+# Le principal de service de l'application doit disposer de SELECT sur les
+# tables du schéma. Ce droit est réattribué à chaque exécution du job
+# d'ingestion (le renommage de table crée une table neuve, sans privilèges).
+# =============================================================================
+
+command:
+  - uvicorn
+  - app.server.main:app
+  - --host
+  - 0.0.0.0
+  - --port
+  - '8000'
+  # Deux workers sur 2 vCPU : l'application est majoritairement en attente
+  # d'entrées-sorties Postgres. Au-delà, les pools de connexions se
+  # multiplieraient sans gain, jusqu'à saturer le plafond de l'endpoint.
+  - --workers
+  - '2'
+  - --no-access-log
+
+env:
+  # --- Identité -------------------------------------------------------------
+  - name: ENVIRONNEMENT
+    value: prod
+
+  # --- Lakebase -------------------------------------------------------------
+  # PGHOST / PGPORT / PGDATABASE / PGUSER / LAKEBASE_ENDPOINT sont injectés
+  # automatiquement par la ressource « database ». Seul le schéma est à définir.
+  - name: PG_SCHEMA
+    value: backflush
+
+  # Le pool est dimensionné par worker : 2 workers × 6 connexions = 12 au plus,
+  # très en deçà du plafond d'un endpoint Lakebase.
+  - name: POOL_MAX_SIZE
+    value: '6'
+  - name: STATEMENT_TIMEOUT_MS
+    value: '25000'
+
+  # --- Règles métier par défaut --------------------------------------------
+  # Tolérance de référence documentée par le métier : ±0,5 unité.
+  - name: SEUIL_CONFORMITE_DEFAUT
+    value: '0.5'
+  # Fenêtre ouverte au premier affichage : un trimestre.
+  - name: HORIZON_DEFAUT_SEMAINES
+    value: '13'
+
+  # --- Assistant IA ---------------------------------------------------------
+  - name: LLM_ENABLED
+    value: 'true'
+  - name: LLM_ENDPOINT
+    valueFrom: serving-endpoint
+  - name: LLM_MAX_TOOL_ROUNDS
+    value: '5'
+
+  # --- Plafonds de volumétrie ----------------------------------------------
+  - name: PAGE_SIZE_MAX
+    value: '500'
+  - name: EXPORT_ROWS_MAX
+    value: '100000'

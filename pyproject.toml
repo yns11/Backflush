@@ -1,0 +1,41 @@
+[project]
+name = "backflush-analytics"
+version = "1.0.0"
+description = "Analytique des écarts de consommation composant issus du backflush de production."
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q --strict-markers"
+filterwarnings = ["error::DeprecationWarning:app.*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+exclude = [".venv", "app/client", "app/server/static"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle
+    "F",    # pyflakes
+    "I",    # isort
+    "UP",   # pyupgrade
+    "B",    # bugbear
+    "SIM",  # simplifications
+    "RUF",
+]
+ignore = [
+    "E501",    # la longueur est déjà gérée par le formateur
+    "RUF001",  # les apostrophes typographiques françaises sont voulues
+    "RUF002",
+    "RUF003",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Les tests utilisent volontairement des assertions nues et des noms longs.
+"tests/*" = ["S101"]
+# B008 signale un appel de fonction dans une valeur par défaut. C'est
+# précisément le mécanisme d'injection de dépendances de FastAPI
+# (`Body(...)`, `Depends(...)`) : la règle ne s'applique pas ici.
+"app/server/api/*" = ["B008"]

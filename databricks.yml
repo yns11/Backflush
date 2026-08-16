@@ -1,0 +1,109 @@
+# =============================================================================
+# Bundle Databricks — écarts de consommation backflush
+# =============================================================================
+# Trois cibles : dev (isolée par utilisateur), preprod, prod.
+#
+#   databricks bundle validate -t dev   --profile <PROFIL>
+#   databricks bundle deploy   -t dev   --profile <PROFIL>
+#   databricks bundle run backflush_gold -t dev --profile <PROFIL>
+#
+# ⚠️ Avant tout déploiement de l'application, construire le bundle frontend :
+#     ./scripts/build_frontend.sh
+# =============================================================================
+
+bundle:
+  name: backflush_analytics
+
+variables:
+  catalog:
+    description: Catalogue Unity Catalog du modèle gold.
+    default: emotors_data_champions
+  schema:
+    description: Schéma gold.
+    default: backflush
+  bronze_catalog:
+    description: Catalogue des tables ERP brutes.
+    default: emotors_data_platform
+  bronze_schema:
+    default: bronze_erp
+  silver_catalog:
+    default: emotors_data_champions
+  silver_schema:
+    default: silver_erp_ye
+  date_from:
+    description: Début de l'historique analysé (AAAA-MM-JJ).
+    default: "2026-03-30"
+  seuil_conformite:
+    description: Tolérance en unités au-delà de laquelle une ligne n'est plus conforme.
+    default: "0.5"
+  company_predicate:
+    description: >-
+      Filtre société D365 appliqué aux vues source. Paramètre d'exploitation,
+      jamais alimenté par une saisie utilisateur.
+    default: "1 = 1"
+
+  lakebase_host:
+    description: Hôte de l'instance Lakebase (endpoint.status.hosts.host).
+    default: ""
+  lakebase_database:
+    default: databricks_postgres
+  lakebase_endpoint:
+    description: projects/<id>/branches/<branche>/endpoints/<endpoint>
+    default: ""
+  lakebase_pg_schema:
+    default: backflush
+  lakebase_instance:
+    description: Nom de l'instance Lakebase déclarée comme ressource de l'application.
+    default: ""
+  llm_endpoint:
+    description: Endpoint de serving utilisé par l'assistant IA.
+    default: databricks-claude-sonnet-4-5
+  app_service_principal:
+    description: >-
+      Rôle Postgres du principal de service de l'application, qui reçoit SELECT
+      après chaque bascule de table. En général le client_id de l'application.
+    default: ""
+
+  notification_email:
+    description: Destinataire des alertes d'échec de job.
+    default: ""
+
+  schedule_pause_status:
+    description: >-
+      PAUSED ou UNPAUSED. En développement, la planification est suspendue par
+      défaut : une copie de travail ne doit pas réécrire un schéma partagé toutes
+      les nuits.
+    default: PAUSED
+
+include:
+  - resources/*.yml
+
+targets:
+  dev:
+    mode: development
+    default: true
+    workspace:
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
+    variables:
+      # En développement, le modèle est reconstruit sur un historique court :
+      # le job tourne en quelques minutes au lieu de plusieurs dizaines.
+      date_from: "2026-06-01"
+
+  preprod:
+    mode: production
+    workspace:
+      root_path: /Workspace/Shared/.bundle/${bundle.name}/${bundle.target}
+    variables:
+      schema: backflush_preprod
+      lakebase_pg_schema: backflush_preprod
+      schedule_pause_status: UNPAUSED
+
+  prod:
+    mode: production
+    workspace:
+      root_path: /Workspace/Shared/.bundle/${bundle.name}/${bundle.target}
+    variables:
+      schedule_pause_status: UNPAUSED
+    permissions:
+      - level: CAN_VIEW
+        group_name: users

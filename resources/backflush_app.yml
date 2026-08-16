@@ -1,0 +1,33 @@
+# =============================================================================
+# Ressource Databricks App
+# =============================================================================
+# Le code déployé est le contenu de ../app, bundle React compilé compris. Le
+# script scripts/build_frontend.sh DOIT avoir été exécuté avant le déploiement :
+# sans app/server/static, l'API répond mais l'interface est absente.
+#
+# Les ressources déclarées ici sont résolues par la plateforme et exposées à
+# l'application (voir app/app.yaml) : aucun identifiant n'est écrit en dur.
+# =============================================================================
+
+resources:
+  apps:
+    backflush_analytics:
+      name: "backflush-analytics-${bundle.target}"
+      description: >-
+        Reporting et analytique des écarts de consommation composant issus du
+        backflush de production.
+      source_code_path: ../app
+
+      resources:
+        - name: database
+          description: Instance Lakebase hébergeant le schéma backflush.
+          database:
+            instance_name: ${var.lakebase_instance}
+            database_name: ${var.lakebase_database}
+            permission: CAN_CONNECT_AND_CREATE
+
+        - name: serving-endpoint
+          description: Modèle de fondation utilisé par l'assistant IA.
+          serving_endpoint:
+            name: ${var.llm_endpoint}
+            permission: CAN_QUERY

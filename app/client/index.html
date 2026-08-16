@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <meta
+      name="description"
+      content="Reporting et analytique des écarts de consommation composant issus du backflush de production."
+    />
+    <title>Backflush Analytics — Écarts de consommation</title>
+    <script>
+      // Applique le thème avant le premier rendu : évite le flash de couleur
+      // au chargement. Le choix explicite prime sur la préférence système.
+      (function () {
+        try {
+          var choix = localStorage.getItem('backflush.theme')
+          if (choix === 'light' || choix === 'dark') {
+            document.documentElement.setAttribute('data-theme', choix)
+          }
+        } catch (e) {
+          /* stockage indisponible : on garde la préférence système */
+        }
+      })()
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

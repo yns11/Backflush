@@ -1,0 +1,97 @@
+# =============================================================================
+# Job quotidien : construction du modèle gold puis publication dans Lakebase.
+# =============================================================================
+# Les deux tâches sont dans le MÊME job, enchaînées par une dépendance stricte :
+# publier dans Lakebase un modèle gold qui vient d'échouer servirait des données
+# fausses à l'application avec la même assurance que des données justes.
+#
+# Compute serverless : aucune configuration de cluster à maintenir, démarrage
+# immédiat, et l'environnement Python est déclaré ci-dessous (psycopg n'est pas
+# fourni par défaut).
+# =============================================================================
+
+resources:
+  jobs:
+    backflush_pipeline:
+      name: "[${bundle.target}] Backflush — modèle gold et publication Lakebase"
+      description: >-
+        Reconstruit le modèle d'écarts de consommation composant dans Unity
+        Catalog, vérifie sa qualité, puis le publie dans Lakebase pour
+        l'application « backflush-analytics ».
+
+      # 05h00 heure de Paris : après la clôture des mouvements de la veille et
+      # avant la prise de poste des key-users.
+      schedule:
+        quartz_cron_expression: "0 0 5 * * ?"
+        timezone_id: Europe/Paris
+        pause_status: ${var.schedule_pause_status}
+
+      # Une exécution qui déborde sur la suivante signale un problème : mieux
+      # vaut interrompre que de laisser deux jobs écrire les mêmes tables.
+      max_concurrent_runs: 1
+      timeout_seconds: 7200
+
+      email_notifications:
+        on_failure:
+          - ${var.notification_email}
+        no_alert_for_skipped_runs: true
+
+      # Le job doit rester vert en régime normal : une exécution anormalement
+      # longue est traitée comme un incident, pas comme une lenteur acceptée.
+      health:
+        rules:
+          - metric: RUN_DURATION_SECONDS
+            op: GREATER_THAN
+            value: 3600
+
+      environments:
+        - environment_key: backflush
+          spec:
+            client: "3"
+            dependencies:
+              - psycopg[binary]>=3.2,<4.0
+              - databricks-sdk>=0.38,<1.0
+
+      tasks:
+        - task_key: construire_modele_gold
+          description: >-
+            Exécute les scripts SQL de src/sql/gold dans l'ordre, puis échoue si
+            un contrôle qualité de sévérité ERREUR est en anomalie.
+          environment_key: backflush
+          spark_python_task:
+            python_file: ../src/jobs/build_gold.py
+            parameters:
+              - --catalog=${var.catalog}
+              - --schema=${var.schema}
+              - --bronze-catalog=${var.bronze_catalog}
+              - --bronze-schema=${var.bronze_schema}
+              - --silver-catalog=${var.silver_catalog}
+              - --silver-schema=${var.silver_schema}
+              - --date-from=${var.date_from}
+              - --seuil-conformite=${var.seuil_conformite}
+              - --company-predicate=${var.company_predicate}
+
+        - task_key: publier_lakebase
+          description: >-
+            Charge chaque table gold dans une table de transit Lakebase, crée
+            les index, puis bascule atomiquement et réattribue les droits.
+          depends_on:
+            - task_key: construire_modele_gold
+          # ALL_SUCCESS (défaut) : la publication est strictement conditionnée à
+          # la validité du modèle amont.
+          run_if: ALL_SUCCESS
+          environment_key: backflush
+          spark_python_task:
+            python_file: ../src/jobs/sync_to_lakebase.py
+            parameters:
+              - --catalog=${var.catalog}
+              - --schema=${var.schema}
+              - --pg-schema=${var.lakebase_pg_schema}
+              - --pg-host=${var.lakebase_host}
+              - --pg-database=${var.lakebase_database}
+              - --lakebase-endpoint=${var.lakebase_endpoint}
+              - --app-role=${var.app_service_principal}
+          # Le réseau et le réveil d'une instance Lakebase mise à l'échelle zéro
+          # peuvent échouer une première fois : une seule reprise suffit.
+          max_retries: 1
+          min_retry_interval_millis: 60000

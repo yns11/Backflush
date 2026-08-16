@@ -1,0 +1,26 @@
+# Dépendances de l'application Databricks « backflush-analytics ».
+#
+# Le runtime Databricks Apps (Python 3.11) fournit déjà FastAPI et uvicorn, mais
+# on épingle des bornes explicites : une montée de version silencieuse du
+# runtime ne doit pas modifier le comportement de l'application en production.
+#
+# ⚠️ psycopg n'est PAS pré-installé. Son absence est la première cause d'échec
+# au démarrage d'une application Lakebase.
+
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.30,<1.0
+pydantic>=2.9,<3.0
+pydantic-settings>=2.5,<3.0
+
+# Lakebase / PostgreSQL
+psycopg[binary]>=3.2,<4.0
+psycopg-pool>=3.2,<4.0
+
+# SDK Databricks : jeton OAuth Lakebase, identité, client de serving
+databricks-sdk>=0.38,<1.0
+
+# Assistant IA — client compatible OpenAI pointé sur le endpoint de serving
+openai>=1.50,<3.0
+
+# Export Excel
+openpyxl>=3.1,<4.0

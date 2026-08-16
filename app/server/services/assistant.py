@@ -1,0 +1,484 @@
+"""Assistant IA « écarts backflush ».
+
+Choix structurant : **outils métier plutôt que texte-vers-SQL libre.**
+
+Un assistant qui génère du SQL arbitraire sur une base de production cumule
+trois risques : requêtes coûteuses non bornées, jointures fausses présentées
+avec assurance, et surface d'injection. Ici, le modèle ne peut appeler qu'un
+catalogue fermé de fonctions — les mêmes que celles qui alimentent les écrans —
+chacune paramétrée, bornée en volume et déjà validée. Le modèle choisit *quoi*
+demander ; il ne choisit jamais *comment* la base est interrogée.
+
+Trois garanties visibles par l'utilisateur :
+
+1. **Traçabilité** — chaque réponse expose la liste des outils appelés et leurs
+   paramètres ; l'utilisateur voit d'où viennent les chiffres.
+2. **Ancrage** — les outils héritent par défaut des filtres de l'écran courant :
+   l'assistant répond sur ce que l'utilisateur regarde, pas sur tout l'historique.
+3. **Réserve** — le prompt système impose d'annoncer explicitement les limites du
+   modèle de données (pas de rebut, maille hebdomadaire, coûts manquants).
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from collections.abc import Callable, Iterable
+from datetime import date, datetime
+from decimal import Decimal
+from typing import Any, Literal
+
+from pydantic import BaseModel, Field
+
+from app.server.core.config import Settings
+from app.server.core.errors import AssistantIndisponibleError
+from app.server.data.repository import Repository
+from app.server.domain.dictionary import GRILLES, contexte_metier
+from app.server.domain.filters import Filtres
+from app.server.domain.metrics import construire_indicateurs
+
+LOGGER = logging.getLogger("backflush.assistant")
+
+#: Plafonds appliqués aux résultats d'outils — protègent la fenêtre de contexte
+#: du modèle autant que la base.
+LIMITE_LIGNES_OUTIL = 50
+LIMITE_LIGNES_LOT = 300
+
+AVERTISSEMENT = (
+    "Réponse générée par IA à partir des données Backflush. "
+    "Vérifiez les chiffres avant toute décision d'exploitation."
+)
+
+
+class MessageChat(BaseModel):
+    role: Literal["user", "assistant"]
+    contenu: str
+
+
+class AppelOutil(BaseModel):
+    """Trace d'un appel d'outil, renvoyée à l'interface pour inspection."""
+
+    outil: str
+    arguments: dict[str, Any]
+    nb_lignes: int | None = None
+    erreur: str | None = None
+
+
+class ReponseAssistant(BaseModel):
+    reponse: str
+    appels: list[AppelOutil] = Field(default_factory=list)
+    avertissement: str = AVERTISSEMENT
+    modele: str
+
+
+def _json_sur(valeur: Any) -> Any:
+    """Rend une valeur SQL sérialisable en JSON pour le modèle."""
+    if isinstance(valeur, Decimal):
+        return float(valeur)
+    if isinstance(valeur, (date, datetime)):
+        return valeur.isoformat()
+    return valeur
+
+
+def _serialiser(lignes: Iterable[dict[str, Any]], limite: int) -> list[dict[str, Any]]:
+    resultat = []
+    for index, ligne in enumerate(lignes):
+        if index >= limite:
+            break
+        resultat.append({cle: _json_sur(valeur) for cle, valeur in ligne.items()})
+    return resultat
+
+
+# ---------------------------------------------------------------------------
+# Catalogue d'outils
+# ---------------------------------------------------------------------------
+_SCHEMA_FILTRES = {
+    "type": "object",
+    "description": (
+        "Surcharge partielle des filtres de l'écran courant. Omettre un champ "
+        "conserve la valeur affichée par l'utilisateur."
+    ),
+    "properties": {
+        "date_debut": {"type": "string", "description": "Lundi de début, AAAA-MM-JJ."},
+        "date_fin": {"type": "string", "description": "Lundi de fin, AAAA-MM-JJ."},
+        "programmes": {"type": "array", "items": {"type": "string"}},
+        "categories": {"type": "array", "items": {"type": "string"}},
+        "composants": {"type": "array", "items": {"type": "string"}},
+        "parents": {"type": "array", "items": {"type": "string"}},
+        "types_ecart": {
+            "type": "array",
+            "items": {"enum": ["Non-consommation", "Surconsommation", "Conforme"]},
+        },
+        "statuts_ligne": {
+            "type": "array",
+            "items": {"enum": ["Nominal", "Hors nomenclature", "Sans consommation"]},
+        },
+        "exclure_conforme": {"type": "boolean"},
+    },
+    "additionalProperties": False,
+}
+
+
+def definitions_outils() -> list[dict[str, Any]]:
+    """Schémas OpenAI des outils exposés au modèle."""
+    def outil(nom: str, description: str, proprietes: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "type": "function",
+            "function": {
+                "name": nom,
+                "description": description,
+                "parameters": {
+                    "type": "object",
+                    "properties": {"filtres": _SCHEMA_FILTRES, **proprietes},
+                    "additionalProperties": False,
+                },
+            },
+        }
+
+    return [
+        outil(
+            "indicateurs",
+            "Indicateurs de synthèse de la sélection : écart net valorisé, non-consommation, "
+            "surconsommation, fiabilité du backflush, taux de conformité, volumes. "
+            "À utiliser en premier pour toute question de niveau global.",
+            {},
+        ),
+        outil(
+            "serie_hebdomadaire",
+            "Évolution semaine par semaine (théorique, réel, écart, impact €). "
+            "À utiliser pour toute question de tendance, de rupture ou de saisonnalité.",
+            {},
+        ),
+        outil(
+            "repartition",
+            "Agrégat par dimension : programme, categorie, type ou statut. "
+            "À utiliser pour situer où se concentre le problème.",
+            {"dimension": {"enum": ["programme", "categorie", "type", "statut"]}},
+        ),
+        outil(
+            "top_composants",
+            "Composants classés par impact financier absolu, avec leur programme.",
+            {"limite": {"type": "integer", "minimum": 1, "maximum": 50}},
+        ),
+        outil(
+            "detail_lignes",
+            "Lignes de détail parent × composant × semaine, triées par impact absolu. "
+            "À utiliser pour instruire un cas précis, jamais pour compter.",
+            {"limite": {"type": "integer", "minimum": 1, "maximum": 50}},
+        ),
+        outil(
+            "fiche_article",
+            "Fiche du référentiel : désignation, catégorie, programme, coût standard, unité.",
+            {"item_id": {"type": "string"}},
+        ),
+        outil(
+            "nomenclature_parent",
+            "Composants d'un article parent avec leur coefficient de nomenclature.",
+            {"parent_itemid": {"type": "string"}},
+        ),
+        outil(
+            "parents_composant",
+            "Articles parents utilisant un composant, avec leur coefficient. "
+            "Indispensable pour juger si un coefficient est uniforme.",
+            {"child_itemid": {"type": "string"}},
+        ),
+        outil(
+            "qualite_donnees",
+            "Contrôles qualité et fraîcheur de la dernière ingestion. "
+            "À consulter avant d'affirmer qu'un écart est réel.",
+            {},
+        ),
+    ]
+
+
+PROMPT_SYSTEME = """\
+Tu es l'assistant analytique d'une application de suivi des écarts de consommation
+composant issus du backflush de production (ERP Dynamics 365 F&O, secteur moteurs
+électriques). Tes interlocuteurs sont des key-users : responsables production,
+gestionnaires de stock, contrôleurs de gestion industriels.
+
+MÉTHODE — non négociable
+1. Ne réponds JAMAIS de mémoire sur des chiffres : appelle les outils. Sans appel
+   d'outil, tu n'as aucune donnée.
+2. Commence par le niveau le plus agrégé qui répond à la question, puis descends.
+3. Cite systématiquement les valeurs chiffrées avec leur unité (€, unités, %) et
+   la période concernée.
+4. Si les outils ne permettent pas de répondre, dis-le explicitement et indique
+   quel écran ou quelle donnée manquante permettrait de conclure. N'invente rien.
+5. Distingue toujours une CONSTATATION (ce que disent les données) d'une
+   HYPOTHÈSE de cause (ce que tu supposes).
+
+FORME
+- Français professionnel, dense, sans emphase inutile.
+- Réponse courte pour une question factuelle ; structurée en sections pour une
+  analyse.
+- Termine toute analyse par 2 à 4 actions concrètes et vérifiables, priorisées
+  par impact financier.
+
+CAUSES USUELLES À ENVISAGER (à confronter aux données, jamais à affirmer seules)
+- Non-consommation : backflush non exécuté, OF non clôturé, déclaration de
+  production en avance sur la sortie composant, composant remplacé sans mise à
+  jour de nomenclature.
+- Surconsommation : rebut atelier non déclaré, coefficient de nomenclature
+  sous-évalué, servitude ou perte matière non modélisée, erreur d'unité
+  (KG vs PCE), prélèvement pour retouche ou maintenance.
+- Hors nomenclature : erreur de saisie d'ordre de fabrication, nomenclature
+  obsolète, substitution non tracée.
+
+{contexte}
+"""
+
+
+class AssistantService:
+    """Orchestration du dialogue outillé avec le modèle de fondation."""
+
+    def __init__(self, repository: Repository, settings: Settings) -> None:
+        self._repository = repository
+        self._settings = settings
+        self._client: Any | None = None
+
+    # -- Client LLM --------------------------------------------------------
+    def _openai(self) -> Any:
+        """Client OpenAI pointé sur le endpoint de serving Databricks."""
+        if self._client is not None:
+            return self._client
+        if not self._settings.llm_enabled:
+            raise AssistantIndisponibleError("L'assistant est désactivé sur cette instance.")
+        try:
+            from databricks.sdk import WorkspaceClient
+
+            self._client = WorkspaceClient().serving_endpoints.get_open_ai_client()
+        except Exception as exc:
+            LOGGER.error("Client de serving indisponible : %s", exc)
+            raise AssistantIndisponibleError(
+                "Impossible de joindre le endpoint de serving. Vérifiez la ressource "
+                "« serving endpoint » de l'application et les droits du principal de service."
+            ) from exc
+        return self._client
+
+    # -- Exécution des outils ---------------------------------------------
+    def _outils(self, filtres_base: Filtres) -> dict[str, Callable[[dict[str, Any]], Any]]:
+        depot = self._repository
+
+        def filtres_de(arguments: dict[str, Any]) -> Filtres:
+            """Fusionne la surcharge proposée par le modèle avec les filtres de l'écran."""
+            surcharge = arguments.get("filtres") or {}
+            if not isinstance(surcharge, dict):
+                return filtres_base
+            propres = {cle: valeur for cle, valeur in surcharge.items() if valeur not in (None, [])}
+            # La validation Pydantic s'applique : une surcharge malformée produite
+            # par le modèle est rejetée plutôt qu'injectée.
+            return Filtres.model_validate({**filtres_base.model_dump(mode="json"), **propres})
+
+        def indicateurs(arguments: dict[str, Any]) -> Any:
+            filtres = filtres_de(arguments)
+            agregat = depot.agregat(filtres)
+            precedent = depot.agregat(filtres.periode_precedente()) if filtres.date_debut else None
+            return {
+                "periode": {"debut": str(filtres.date_debut), "fin": str(filtres.date_fin)},
+                "indicateurs": [
+                    indicateur.model_dump() for indicateur in construire_indicateurs(agregat, precedent)
+                ],
+                "concentration": depot.concentration(filtres),
+            }
+
+        def serie(arguments: dict[str, Any]) -> Any:
+            lignes = depot.serie_hebdomadaire(filtres_de(arguments))
+            colonnes = (
+                "semaine_libelle", "conso_theorique", "conso_reelle", "ecart_net",
+                "non_consommation_valorisee", "surconsommation_valorisee",
+                "ecart_valorise", "nb_lignes_ecart",
+            )
+            return _serialiser(
+                ({cle: ligne.get(cle) for cle in colonnes} for ligne in lignes), 120
+            )
+
+        def repartition(arguments: dict[str, Any]) -> Any:
+            return _serialiser(
+                depot.repartition(filtres_de(arguments), arguments.get("dimension", "programme")),
+                LIMITE_LIGNES_OUTIL,
+            )
+
+        def top(arguments: dict[str, Any]) -> Any:
+            limite = min(int(arguments.get("limite", 10)), LIMITE_LIGNES_OUTIL)
+            return _serialiser(depot.top_composants(filtres_de(arguments), limite), limite)
+
+        def detail(arguments: dict[str, Any]) -> Any:
+            limite = min(int(arguments.get("limite", 20)), LIMITE_LIGNES_OUTIL)
+            page = depot.grille("details", filtres_de(arguments), taille=limite, page=1)
+            return _serialiser(page["lignes"], limite)
+
+        return {
+            "indicateurs": indicateurs,
+            "serie_hebdomadaire": serie,
+            "repartition": repartition,
+            "top_composants": top,
+            "detail_lignes": detail,
+            "fiche_article": lambda a: _json_dict(depot.fiche_article(str(a.get("item_id", "")))),
+            "nomenclature_parent": lambda a: _serialiser(
+                depot.nomenclature_du_parent(str(a.get("parent_itemid", ""))), LIMITE_LIGNES_OUTIL
+            ),
+            "parents_composant": lambda a: _serialiser(
+                depot.parents_du_composant(str(a.get("child_itemid", ""))), LIMITE_LIGNES_OUTIL
+            ),
+            "qualite_donnees": lambda a: _json_dict(depot.fraicheur()),
+        }
+
+    # -- Dialogue ----------------------------------------------------------
+    def repondre(
+        self, historique: list[MessageChat], filtres: Filtres, page_active: str = "synthese"
+    ) -> ReponseAssistant:
+        """Conduit un tour de dialogue outillé et retourne la réponse finale."""
+        client = self._openai()
+        outils = self._outils(filtres)
+        appels: list[AppelOutil] = []
+
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": PROMPT_SYSTEME.format(contexte=contexte_metier())},
+            {"role": "system", "content": self._contexte_ecran(filtres, page_active)},
+        ]
+        messages.extend({"role": message.role, "content": message.contenu} for message in historique)
+
+        for tour in range(self._settings.llm_max_tool_rounds):
+            reponse = self._appeler_modele(client, messages)
+            message = reponse.choices[0].message
+            demandes = getattr(message, "tool_calls", None) or []
+
+            messages.append({
+                "role": "assistant",
+                "content": message.content or "",
+                **({"tool_calls": [_dumper_appel(appel) for appel in demandes]} if demandes else {}),
+            })
+
+            if not demandes:
+                return ReponseAssistant(
+                    reponse=message.content or "Je n'ai pas pu produire de réponse.",
+                    appels=appels,
+                    modele=self._settings.llm_endpoint,
+                )
+
+            for demande in demandes:
+                nom = demande.function.name
+                arguments = _charger_arguments(demande.function.arguments)
+                trace = AppelOutil(outil=nom, arguments=arguments)
+                try:
+                    resultat = outils[nom](arguments) if nom in outils else {
+                        "erreur": f"Outil inconnu : {nom}"
+                    }
+                    trace.nb_lignes = len(resultat) if isinstance(resultat, list) else None
+                except KeyError:
+                    resultat = {"erreur": f"Outil inconnu : {nom}"}
+                    trace.erreur = resultat["erreur"]
+                except Exception as exc:
+                    LOGGER.warning("Outil %s en échec : %s", nom, exc)
+                    resultat = {"erreur": "L'outil a échoué ; reformule ou change d'approche."}
+                    trace.erreur = str(exc)[:200]
+                appels.append(trace)
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": demande.id,
+                    "content": json.dumps(resultat, ensure_ascii=False, default=str),
+                })
+
+            LOGGER.info("Tour %d : %d outil(s) appelé(s).", tour + 1, len(demandes))
+
+        return ReponseAssistant(
+            reponse=(
+                "Je n'ai pas convergé vers une réponse dans le nombre d'étapes autorisé. "
+                "Reformulez la question en la restreignant à un programme ou à une période."
+            ),
+            appels=appels,
+            modele=self._settings.llm_endpoint,
+        )
+
+    def analyser_lot(
+        self, grille_cle: str, lignes: list[dict[str, Any]], filtres: Filtres, question: str | None
+    ) -> ReponseAssistant:
+        """Analyse un lot de lignes sélectionnées dans une grille.
+
+        Le lot est transmis tel quel au modèle (borné à
+        :data:`LIMITE_LIGNES_LOT`) : l'utilisateur a explicitement choisi ces
+        lignes, l'assistant n'a donc pas à les redécouvrir par des outils.
+        """
+        client = self._openai()
+        grille = GRILLES.get(grille_cle)
+        if grille is None:
+            raise AssistantIndisponibleError(f"Grille inconnue : {grille_cle}.")
+
+        echantillon = _serialiser(lignes, LIMITE_LIGNES_LOT)
+        consigne = question or (
+            "Analyse ce lot : quels sont les cas les plus coûteux, quels motifs se "
+            "répètent, et quelles actions engager en priorité ?"
+        )
+        messages = [
+            {"role": "system", "content": PROMPT_SYSTEME.format(contexte=contexte_metier())},
+            {"role": "system", "content": self._contexte_ecran(filtres, grille_cle)},
+            {
+                "role": "user",
+                "content": (
+                    f"{consigne}\n\n"
+                    f"Grille « {grille.libelle} » — {len(echantillon)} ligne(s) sélectionnée(s)"
+                    f"{' (échantillon tronqué)' if len(lignes) > LIMITE_LIGNES_LOT else ''} :\n"
+                    f"```json\n{json.dumps(echantillon, ensure_ascii=False, default=str)}\n```"
+                ),
+            },
+        ]
+        reponse = self._appeler_modele(client, messages, avec_outils=False)
+        return ReponseAssistant(
+            reponse=reponse.choices[0].message.content or "Analyse indisponible.",
+            appels=[AppelOutil(outil="selection_utilisateur", arguments={"grille": grille_cle},
+                               nb_lignes=len(echantillon))],
+            modele=self._settings.llm_endpoint,
+        )
+
+    # -- Interne -----------------------------------------------------------
+    def _appeler_modele(self, client: Any, messages: list[dict[str, Any]], *, avec_outils: bool = True):
+        try:
+            return client.chat.completions.create(
+                model=self._settings.llm_endpoint,
+                messages=messages,
+                temperature=self._settings.llm_temperature,
+                max_tokens=self._settings.llm_max_tokens,
+                **({"tools": definitions_outils(), "tool_choice": "auto"} if avec_outils else {}),
+            )
+        except Exception as exc:
+            LOGGER.error("Appel au modèle en échec : %s", exc)
+            raise AssistantIndisponibleError(
+                "Le modèle n'a pas répondu. Réessayez dans quelques instants."
+            ) from exc
+
+    @staticmethod
+    def _contexte_ecran(filtres: Filtres, page_active: str) -> str:
+        return (
+            "CONTEXTE DE L'ÉCRAN — l'utilisateur regarde actuellement ces données. "
+            "Sauf demande contraire explicite, raisonne sur ce périmètre.\n"
+            f"Page : {page_active}\n"
+            f"Filtres actifs : {filtres.model_dump_json(exclude_defaults=True)}\n"
+            f"Date du jour : {date.today().isoformat()}"
+        )
+
+
+def _json_dict(valeur: dict[str, Any] | None) -> dict[str, Any]:
+    if not valeur:
+        return {}
+    return json.loads(json.dumps(valeur, ensure_ascii=False, default=str))
+
+
+def _charger_arguments(brut: str | None) -> dict[str, Any]:
+    """Décode les arguments d'un appel d'outil, en tolérant un JSON malformé."""
+    if not brut:
+        return {}
+    try:
+        charge = json.loads(brut)
+    except json.JSONDecodeError:
+        LOGGER.warning("Arguments d'outil illisibles : %s", brut[:200])
+        return {}
+    return charge if isinstance(charge, dict) else {}
+
+
+def _dumper_appel(appel: Any) -> dict[str, Any]:
+    return {
+        "id": appel.id,
+        "type": "function",
+        "function": {"name": appel.function.name, "arguments": appel.function.arguments},
+    }

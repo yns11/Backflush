@@ -1,0 +1,155 @@
+/* ==========================================================================
+   Jetons de conception
+   --------------------------------------------------------------------------
+   La palette de data-visualisation a été VALIDÉE PAR SCRIPT (bandes de
+   luminosité, plancher de chroma, séparation pour les daltonismes protan /
+   deutan / tritan, contraste sur la surface) dans les deux modes :
+
+     clair  #2a78d6 #eb6834 #1baf7a #eda100  → pire paire adjacente ΔE 9,1 (CVD)
+     sombre #3987e5 #d95926 #199e70 #c98500  → pire paire adjacente ΔE 8,4 (CVD)
+
+   En mode clair, l'aqua et le jaune passent sous 3:1 de contraste : la règle
+   dite « de relief » s'applique — les séries concernées portent toujours une
+   étiquette directe ou sont doublées par une vue tabulaire.
+
+   Le mode sombre n'est PAS une inversion automatique : ce sont les mêmes
+   teintes, ré-échelonnées pour la surface sombre puis revalidées.
+   ========================================================================== */
+
+:root {
+  color-scheme: light;
+
+  /* --- Surfaces et encre --- */
+  --surface: #fcfcfb;
+  --surface-elevee: #ffffff;
+  --plan: #f9f9f7;
+  --encre: #0b0b0b;
+  --encre-secondaire: #52514e;
+  --encre-attenuee: #898781;
+  --grille: #e1e0d9;
+  --axe: #c3c2b7;
+  --bordure: rgba(11, 11, 11, 0.1);
+  --bordure-forte: rgba(11, 11, 11, 0.18);
+  --survol: rgba(11, 11, 11, 0.04);
+  --selection: rgba(42, 120, 214, 0.1);
+  --ombre: 0 1px 2px rgba(11, 11, 11, 0.05), 0 4px 16px rgba(11, 11, 11, 0.06);
+
+  /* --- Séries catégorielles (ordre fixe, jamais recyclé) --- */
+  --serie-1: #2a78d6;
+  --serie-2: #eb6834;
+  --serie-3: #1baf7a;
+  --serie-4: #eda100;
+
+  /* --- Divergent : polarité de l'écart, PAS un bien/mal ---
+     La non-consommation et la surconsommation sont deux anomalies de sens
+     opposé. Le milieu neutre marque l'absence d'écart. */
+  --pole-non-conso: #2a78d6;
+  --pole-surconso: #e34948;
+  --pole-neutre: #f0efec;
+
+  /* --- Statuts (réservés, jamais réutilisés comme série) --- */
+  --statut-bon: #0ca30c;
+  --statut-attention: #fab219;
+  --statut-serieux: #ec835a;
+  --statut-critique: #d03b3b;
+  --texte-succes: #006300;
+
+  /* --- Séquentiel (magnitude continue) --- */
+  --sequentiel-100: #cde2fb;
+  --sequentiel-250: #86b6ef;
+  --sequentiel-400: #3987e5;
+  --sequentiel-550: #1c5cab;
+  --sequentiel-700: #0d366b;
+
+  /* --- Typographie --- */
+  --police: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --police-mono: ui-monospace, 'SF Mono', 'Cascadia Mono', Menlo, monospace;
+
+  /* --- Rythme --- */
+  --espace-1: 4px;
+  --espace-2: 8px;
+  --espace-3: 12px;
+  --espace-4: 16px;
+  --espace-5: 24px;
+  --espace-6: 32px;
+  --rayon-s: 6px;
+  --rayon-m: 10px;
+  --rayon-l: 14px;
+
+  --hauteur-entete: 56px;
+  --hauteur-ligne-grille: 34px;
+}
+
+/* Mode sombre par préférence système, sauf choix explicite « clair ». */
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme='light'])) {
+    color-scheme: dark;
+
+    --surface: #1a1a19;
+    --surface-elevee: #232322;
+    --plan: #0d0d0d;
+    --encre: #ffffff;
+    --encre-secondaire: #c3c2b7;
+    --encre-attenuee: #898781;
+    --grille: #2c2c2a;
+    --axe: #383835;
+    --bordure: rgba(255, 255, 255, 0.1);
+    --bordure-forte: rgba(255, 255, 255, 0.18);
+    --survol: rgba(255, 255, 255, 0.05);
+    --selection: rgba(57, 135, 229, 0.16);
+    --ombre: 0 1px 2px rgba(0, 0, 0, 0.4), 0 4px 16px rgba(0, 0, 0, 0.3);
+
+    --serie-1: #3987e5;
+    --serie-2: #d95926;
+    --serie-3: #199e70;
+    --serie-4: #c98500;
+
+    --pole-non-conso: #3987e5;
+    --pole-surconso: #e66767;
+    --pole-neutre: #383835;
+
+    --texte-succes: #0ca30c;
+
+    --sequentiel-100: #0d366b;
+    --sequentiel-250: #184f95;
+    --sequentiel-400: #256abf;
+    --sequentiel-550: #5598e7;
+    --sequentiel-700: #b7d3f6;
+  }
+}
+
+/* Choix explicite de l'utilisateur : prime dans les deux sens. */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --surface: #1a1a19;
+  --surface-elevee: #232322;
+  --plan: #0d0d0d;
+  --encre: #ffffff;
+  --encre-secondaire: #c3c2b7;
+  --encre-attenuee: #898781;
+  --grille: #2c2c2a;
+  --axe: #383835;
+  --bordure: rgba(255, 255, 255, 0.1);
+  --bordure-forte: rgba(255, 255, 255, 0.18);
+  --survol: rgba(255, 255, 255, 0.05);
+  --selection: rgba(57, 135, 229, 0.16);
+  --ombre: 0 1px 2px rgba(0, 0, 0, 0.4), 0 4px 16px rgba(0, 0, 0, 0.3);
+
+  --serie-1: #3987e5;
+  --serie-2: #d95926;
+  --serie-3: #199e70;
+  --serie-4: #c98500;
+
+  --pole-non-conso: #3987e5;
+  --pole-surconso: #e66767;
+  --pole-neutre: #383835;
+
+  --texte-succes: #0ca30c;
+
+  --sequentiel-100: #0d366b;
+  --sequentiel-250: #184f95;
+  --sequentiel-400: #256abf;
+  --sequentiel-550: #5598e7;
+  --sequentiel-700: #b7d3f6;
+}
