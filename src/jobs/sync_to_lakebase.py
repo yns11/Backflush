@@ -115,56 +115,96 @@ def version_sdk() -> str:
         return "inconnue"
 
 
+#: Chemins REST de génération d'identifiant Lakebase, par génération d'API.
+#: Relevés dans la source du SDK Databricks 0.130 ; ces chemins sont le contrat
+#: réel du service, que les méthodes typées du SDK ne font qu'envelopper.
+REST_CREDENTIALS_POSTGRES = "/api/2.0/postgres/credentials"
+REST_CREDENTIALS_DATABASE = "/api/2.0/database/credentials"
+
+
 def generer_jeton_lakebase(workspace: Any, endpoint: str) -> str:
-    """Génère un identifiant Lakebase, quelle que soit la génération d'API du SDK.
+    """Génère un identifiant Lakebase, quelle que soit la version du SDK.
 
-    Deux générations coexistent, et le SDK embarqué dans un environnement de job
-    n'est pas toujours celui du poste de développement :
+    Deux générations d'API coexistent — « projects / branches / endpoints »
+    (actuelle) et « database instances » (antérieure) — et la version du SDK
+    embarquée dans un environnement de job n'est pas celle du poste de
+    développement : un environnement serverless a résolu 0.49, qui ne porte
+    NI l'une NI l'autre sous forme typée.
 
-    * ``w.postgres`` — génération « projects / branches / endpoints », l'actuelle ;
-    * ``w.database`` — génération « database instances », antérieure.
+    Trois pistes, dans cet ordre :
 
-    On essaie la plus récente, puis l'autre. En cas d'échec des deux, le message
-    nomme la version installée et les pistes tentées : sans cela, l'erreur se
-    résume à un ``AttributeError`` sur un attribut absent, qui ne dit ni
-    pourquoi ni comment y remédier.
+    1. ``w.postgres.generate_database_credential`` — méthode typée, si présente ;
+    2. **appel REST direct** sur ``/api/2.0/postgres/credentials`` — c'est le
+       contrat réel du service, que la méthode typée ne fait qu'envelopper.
+       ``api_client.do`` existe depuis les toutes premières versions du SDK :
+       cette piste est donc indépendante de la version, ce qui supprime la
+       cause racine plutôt que de la contourner ;
+    3. la génération antérieure, typée puis REST, pour les espaces de travail
+       restés sur les « database instances ».
     """
     tentatives: list[str] = []
 
+    def rest(chemin: str, corps: dict[str, Any]) -> str | None:
+        """Appel REST bas niveau. Retourne le jeton, ou None en consignant l'échec."""
+        client = getattr(workspace, "api_client", None)
+        if client is None or not hasattr(client, "do"):
+            tentatives.append(f"REST {chemin} : api_client indisponible")
+            return None
+        try:
+            reponse = client.do("POST", chemin, body=corps)
+        except Exception as exc:
+            tentatives.append(f"REST {chemin} : {exc}")
+            return None
+        jeton = (reponse or {}).get("token")
+        if not jeton:
+            tentatives.append(f"REST {chemin} : réponse sans jeton ({sorted(reponse or {})})")
+            return None
+        LOGGER.info("Identifiant Lakebase obtenu par appel REST direct sur %s.", chemin)
+        return jeton
+
+    # --- 1. Génération actuelle, méthode typée ---
     api_postgres = getattr(workspace, "postgres", None)
     if api_postgres is not None and hasattr(api_postgres, "generate_database_credential"):
         try:
             return api_postgres.generate_database_credential(endpoint=endpoint).token
-        except Exception as exc:  # on tente la génération suivante
+        except Exception as exc:
             tentatives.append(f"w.postgres.generate_database_credential : {exc}")
     else:
-        tentatives.append("w.postgres : absent de cette version du SDK")
+        tentatives.append(f"w.postgres : absent du SDK {version_sdk()}")
 
+    # --- 2. Génération actuelle, appel REST direct ---
+    jeton = rest(REST_CREDENTIALS_POSTGRES, {"endpoint": endpoint})
+    if jeton:
+        return jeton
+
+    # --- 3. Génération antérieure : l'API raisonne en « instances »,
+    #        pas en endpoints. L'identifiant de projet est extrait du chemin.
+    instance = endpoint.split("/")[1] if "/" in endpoint else endpoint
     api_database = getattr(workspace, "database", None)
     if api_database is not None and hasattr(api_database, "generate_database_credential"):
         try:
-            # L'API antérieure raisonne en « instances », pas en endpoints : on
-            # extrait l'identifiant de projet du chemin de ressource.
-            instance = endpoint.split("/")[1] if "/" in endpoint else endpoint
             return api_database.generate_database_credential(
                 request_id=str(uuid4()), instance_names=[instance]
             ).token
-        except Exception as exc:  # dernière piste : on rapporte tout
+        except Exception as exc:
             tentatives.append(f"w.database.generate_database_credential : {exc}")
     else:
-        tentatives.append("w.database : absent de cette version du SDK")
+        tentatives.append(f"w.database : absent du SDK {version_sdk()}")
+
+    jeton = rest(
+        REST_CREDENTIALS_DATABASE,
+        {"instance_names": [instance], "request_id": str(uuid4())},
+    )
+    if jeton:
+        return jeton
 
     raise RuntimeError(
         f"Impossible de générer un identifiant Lakebase pour « {endpoint} ».\n"
         f"Version du SDK Databricks installée : {version_sdk()}\n"
         "Pistes tentées :\n  • " + "\n  • ".join(tentatives) + "\n\n"
-        "Deux remèdes :\n"
-        "  1. Relever la version de databricks-sdk dans le bloc `environments` de "
-        "resources/backflush_pipeline.job.yml — l'API `postgres` n'existe pas dans "
-        "les versions anciennes.\n"
-        "  2. Contourner la génération : passer le mot de passe par la variable "
-        "d'environnement PGPASSWORD, après l'avoir obtenu par "
-        "`databricks postgres generate-database-credential`."
+        "Remède immédiat — passer le mot de passe par la variable d'environnement "
+        "PGPASSWORD de la tâche, après l'avoir obtenu par :\n"
+        f"  databricks postgres generate-database-credential --json '{{\"endpoint\": \"{endpoint}\"}}'"
     )
 
 

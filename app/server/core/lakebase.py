@@ -49,6 +49,12 @@ LOGGER = logging.getLogger("backflush.lakebase")
 # résultat est converti.
 psycopg.adapters.register_loader("numeric", FloatLoader)
 
+#: Chemin REST de génération d'un identifiant Lakebase. Relevé dans la source du
+#: SDK Databricks : c'est le contrat réel du service, que la méthode typée ne
+#: fait qu'envelopper. L'appeler directement rend le code indépendant de la
+#: version du SDK embarquée dans le runtime.
+REST_CREDENTIALS_POSTGRES = "/api/2.0/postgres/credentials"
+
 
 class LakebasePool:
     """Encapsule un :class:`ConnectionPool` psycopg et la rotation du jeton."""
@@ -206,32 +212,47 @@ class LakebasePool:
         workspace = self._workspace_client()
         tentatives: list[str] = []
 
+        # 1. Méthode typée, si la version du SDK la porte.
         api_postgres = getattr(workspace, "postgres", None)
         if api_postgres is not None and hasattr(api_postgres, "generate_database_credential"):
             try:
                 return api_postgres.generate_database_credential(endpoint=endpoint).token
-            except Exception as exc:  # on tente la génération suivante
+            except Exception as exc:
                 tentatives.append(f"w.postgres : {exc}")
         else:
             tentatives.append("w.postgres : absent de cette version du SDK")
 
+        # 2. Appel REST direct — contrat réel du service, que la méthode typée
+        #    ne fait qu'envelopper. `api_client.do` existe depuis les premières
+        #    versions du SDK : cette piste est indépendante de la version.
+        client = getattr(workspace, "api_client", None)
+        if client is not None and hasattr(client, "do"):
+            try:
+                reponse = client.do("POST", REST_CREDENTIALS_POSTGRES, body={"endpoint": endpoint})
+                jeton = (reponse or {}).get("token")
+                if jeton:
+                    LOGGER.info("Identifiant Lakebase obtenu par appel REST direct.")
+                    return jeton
+                tentatives.append("REST postgres : réponse sans jeton")
+            except Exception as exc:
+                tentatives.append(f"REST postgres : {exc}")
+
+        # 3. Génération antérieure, pour les espaces restés sur les instances.
+        instance = endpoint.split("/")[1] if "/" in endpoint else endpoint
         api_database = getattr(workspace, "database", None)
         if api_database is not None and hasattr(api_database, "generate_database_credential"):
             try:
-                instance = endpoint.split("/")[1] if "/" in endpoint else endpoint
                 return api_database.generate_database_credential(
                     request_id=str(uuid4()), instance_names=[instance]
                 ).token
-            except Exception as exc:  # dernière piste
+            except Exception as exc:
                 tentatives.append(f"w.database : {exc}")
-        else:
-            tentatives.append("w.database : absent de cette version du SDK")
 
         LOGGER.error("Génération d'identifiant Lakebase impossible : %s", " | ".join(tentatives))
         raise ConfigurationError(
             "Impossible d'obtenir un identifiant de connexion à Lakebase. "
-            "Relevez la version de databricks-sdk dans app/requirements.txt, ou "
-            "fournissez PGPASSWORD via la ressource « postgres » de l'application."
+            "Fournissez PGPASSWORD via la ressource « postgres » de l'application, "
+            "ou relevez la version de databricks-sdk dans app/requirements.txt."
         )
 
     def _start_refresher(self) -> None:
