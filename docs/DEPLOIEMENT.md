@@ -12,13 +12,21 @@
 
 ## 1. Relever les identifiants Lakebase
 
+Toutes ces commandes prennent **un seul argument** : le chemin de ressource du
+parent. Un nom court est refusé (`No API found for 'GET /postgres/<nom>/...'`).
+
 ```bash
 databricks postgres list-projects  --profile <PROFIL>
-databricks postgres list-branches  <PROJET> --profile <PROFIL>
-databricks postgres list-databases <PROJET> <BRANCHE> --profile <PROFIL>
-databricks postgres get-endpoint "projects/<PROJET>/branches/<BRANCHE>/endpoints/<ENDPOINT>" \
+databricks postgres list-branches  projects/<PROJET> --profile <PROFIL>
+databricks postgres list-databases projects/<PROJET>/branches/<BRANCHE> --profile <PROFIL>
+databricks postgres list-endpoints projects/<PROJET>/branches/<BRANCHE> --profile <PROFIL>
+databricks postgres get-endpoint   projects/<PROJET>/branches/<BRANCHE>/endpoints/<ENDPOINT> \
   --profile <PROFIL> -o json | jq -r '.status.hosts.host'
 ```
+
+Chaque niveau donne le chemin du suivant : `list-projects` retourne
+`projects/backflush`, que l'on passe à `list-branches`, qui retourne
+`projects/backflush/branches/production`, et ainsi de suite.
 
 Quatre valeurs à conserver :
 
@@ -36,6 +44,19 @@ Quatre valeurs à conserver :
 > Le nom de la base est souvent **tireté** (`databricks-postgres`) là où le nom
 > Postgres est souligné (`databricks_postgres`). `list-databases` donne la forme
 > exacte ; ne pas la deviner.
+
+Exemple complet, pour un projet `backflush` sur sa branche `production` :
+
+| Variable | Valeur |
+|---|---|
+| `lakebase_endpoint` | `projects/backflush/branches/production/endpoints/primary` |
+| `lakebase_branch` | `projects/backflush/branches/production` |
+| `lakebase_database_path` | `projects/backflush/branches/production/databases/<BASE>` |
+| `lakebase_host` | valeur de `status.hosts.host` retournée par `get-endpoint` |
+
+> Si `list-projects` affiche `"enable_pg_native_login": false` — le cas par
+> défaut — le projet n'accepte **que** l'authentification OAuth. C'est le mode
+> que l'application privilégie ; aucune action n'est requise.
 
 ## 2. Compiler le frontend
 
