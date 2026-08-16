@@ -63,6 +63,8 @@ Les 20 axes d'amélioration priorisés sont dans [`docs/AMELIORATIONS.md`](docs/
 
 ```
 .
+├── .claude/skills/
+│   └── databricks-livraison/      Catalogue des pièges de déploiement + vérificateur statique
 ├── databricks.yml                 Bundle DAB (jobs + app), 3 cibles dev/preprod/prod
 ├── resources/
 │   ├── backflush_gold.job.yml     ❶ Construction du modèle gold dans Unity Catalog

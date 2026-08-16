@@ -10,6 +10,19 @@
 | Unity Catalog | `USE CATALOG`, `USE SCHEMA`, `CREATE TABLE` sur le schéma cible ; `SELECT` sur les tables bronze et silver |
 | Endpoint de serving | Un modèle de fondation accessible, pour l'assistant IA |
 
+### Contrôle préalable
+
+```bash
+python .claude/skills/databricks-livraison/verifier_bundle.py .
+```
+
+Lecture seule, moins d'une seconde. Il détecte les défauts qui passent
+`bundle validate`, se déploient sans un message, puis se manifestent par un
+symptôme désignant la mauvaise cause — c'est ce qui a coûté le plus de temps sur
+ce projet. Le même contrôle tourne dans la suite de tests
+(`tests/test_bundle_livrable.py`) ; le catalogue complet des pièges est dans
+`.claude/skills/databricks-livraison/SKILL.md`.
+
 ## 1. Relever les identifiants Lakebase
 
 Toutes ces commandes prennent **un seul argument** : le chemin de ressource du
