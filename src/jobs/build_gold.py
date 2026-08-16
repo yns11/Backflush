@@ -21,7 +21,46 @@ import logging
 import sys
 from pathlib import Path
 
-from src.jobs.sqlutil import (
+
+def _amorcer_chemin_projet() -> Path:
+    """Place la racine du projet dans ``sys.path`` et la retourne.
+
+    Une tâche ``spark_python_task`` n'exécute pas un paquet : Databricks lit le
+    fichier et l'évalue, sans que la racine du bundle figure dans ``sys.path``.
+    Sans cette amorce, ``from src.jobs...`` échoue par ``ModuleNotFoundError``,
+    alors que le même script fonctionne en local via ``python -m``.
+
+    Trois pistes sont essayées, car aucune n'est disponible dans tous les modes
+    d'exécution : ``__file__`` n'est pas défini quand le code est évalué dans
+    des globales de notebook, et ``sys.argv[0]`` ne l'est pas partout non plus.
+    Chaque piste est remontée jusqu'au dossier contenant ``src/jobs/sqlutil.py``,
+    ce qui identifie la racine sans dépendre d'une profondeur de répertoire.
+    """
+    candidats: list[Path] = []
+    fichier = globals().get("__file__")
+    if fichier:
+        candidats.append(Path(fichier).resolve())
+    if sys.argv and sys.argv[0]:
+        candidats.append(Path(sys.argv[0]).resolve())
+    candidats.append(Path.cwd().resolve())
+
+    for candidat in candidats:
+        for base in (candidat, *candidat.parents):
+            if (base / "src" / "jobs" / "sqlutil.py").is_file():
+                if str(base) not in sys.path:
+                    sys.path.insert(0, str(base))
+                return base
+
+    raise RuntimeError(
+        "Racine du projet introuvable : aucun dossier parent ne contient "
+        "src/jobs/sqlutil.py. Vérifiez que le bundle a bien été synchronisé "
+        f"en entier (pistes explorées : {[str(c) for c in candidats]})."
+    )
+
+
+RACINE = _amorcer_chemin_projet()
+
+from src.jobs.sqlutil import (  # noqa: E402 — l'amorce ci-dessus doit précéder l'import
     render_template,
     split_statements,
     validate_identifier,
@@ -31,9 +70,8 @@ from src.jobs.sqlutil import (
 
 LOGGER = logging.getLogger("backflush.build_gold")
 
-# Répertoire des scripts SQL, résolu relativement à ce fichier pour fonctionner
-# aussi bien en local qu'une fois le dépôt synchronisé dans le workspace.
-SQL_DIR = Path(__file__).resolve().parents[1] / "sql" / "gold"
+#: Répertoire des scripts SQL, résolu depuis la racine détectée.
+SQL_DIR = RACINE / "src" / "sql" / "gold"
 
 
 def build_arg_parser() -> argparse.ArgumentParser:

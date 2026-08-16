@@ -42,12 +42,47 @@ import time
 from collections.abc import Iterable, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import psycopg
 from psycopg import sql as pgsql
 
-from src.jobs.lakebase_schema import (
+
+def _amorcer_chemin_projet() -> Path:
+    """Place la racine du projet dans ``sys.path`` et la retourne.
+
+    Voir la justification détaillée dans ``src/jobs/build_gold.py`` : une tâche
+    ``spark_python_task`` évalue le fichier sans que la racine du bundle figure
+    dans ``sys.path``. Le code est volontairement dupliqué plutôt que
+    factorisé — une fonction partagée devrait elle-même être importée, ce qui
+    est précisément ce qui échoue avant l'amorce.
+    """
+    candidats: list[Path] = []
+    fichier = globals().get("__file__")
+    if fichier:
+        candidats.append(Path(fichier).resolve())
+    if sys.argv and sys.argv[0]:
+        candidats.append(Path(sys.argv[0]).resolve())
+    candidats.append(Path.cwd().resolve())
+
+    for candidat in candidats:
+        for base in (candidat, *candidat.parents):
+            if (base / "src" / "jobs" / "sqlutil.py").is_file():
+                if str(base) not in sys.path:
+                    sys.path.insert(0, str(base))
+                return base
+
+    raise RuntimeError(
+        "Racine du projet introuvable : aucun dossier parent ne contient "
+        "src/jobs/sqlutil.py. Vérifiez que le bundle a bien été synchronisé "
+        f"en entier (pistes explorées : {[str(c) for c in candidats]})."
+    )
+
+
+RACINE = _amorcer_chemin_projet()
+
+from src.jobs.lakebase_schema import (  # noqa: E402 — l'amorce doit précéder l'import
     META_INGESTION,
     SCHEMA,
     TABLES,
@@ -55,7 +90,7 @@ from src.jobs.lakebase_schema import (
     create_indexes_sql,
     create_table_sql,
 )
-from src.jobs.sqlutil import validate_identifier
+from src.jobs.sqlutil import validate_identifier  # noqa: E402
 
 LOGGER = logging.getLogger("backflush.sync_to_lakebase")
 
