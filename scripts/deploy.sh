@@ -12,6 +12,8 @@
 #
 # La recompilation est ignorée si aucune source frontend n'a changé depuis le
 # dernier build : l'usage courant reste rapide.
+#
+# Sous PowerShell, utilisez scripts/deploy.ps1.
 # =============================================================================
 set -euo pipefail
 

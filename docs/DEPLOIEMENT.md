@@ -40,7 +40,25 @@ Quatre valeurs à conserver :
 ## 2. Compiler le frontend
 
 ```bash
-./scripts/build_frontend.sh
+./scripts/build_frontend.sh            # Linux, macOS, Git Bash
+```
+
+```powershell
+.\scripts\build_frontend.ps1           # Windows PowerShell
+```
+
+Les deux scripts **localisent npm automatiquement**, y compris hors `PATH` — cas
+courant d'une installation Node.js sous `C:\Program Files\nodejs`. Si votre
+installation est ailleurs, indiquez-la par variable d'environnement plutôt que
+de modifier le script (une modification locale serait écrasée à la prochaine
+mise à jour, et casserait la compilation pour les autres postes) :
+
+```powershell
+$env:NPM = "C:\Program Files\nodejs\npm.cmd"
+```
+
+```bash
+NPM="/c/Program Files/nodejs/npm" ./scripts/build_frontend.sh
 ```
 
 Le bundle est écrit dans `app/server/static`, dossier **non versionné** (c'est un
