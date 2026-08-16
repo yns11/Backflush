@@ -19,16 +19,19 @@ Dynamics 365 F&O → Lakehouse → Lakebase → App).
 
 | Écran | Contenu |
 |---|---|
-| **Synthèse** | 8 KPI (écart net valorisé, non-conso, surconso, taux de conformité, fiabilité backflush, couverture, concentration, fraîcheur), tendance hebdomadaire théorique vs réel, variance hebdomadaire, classement programmes, top composants — **tous drill-through** |
+| **Synthèse** | 8 KPI (écart net valorisé, non-conso, surconso, taux de conformité, fiabilité backflush, couverture, concentration, fraîcheur), tendance hebdomadaire théorique vs réel, variance hebdomadaire, classements **programme / périmètre / catégorie**, top composants — **tous drill-through** |
 | **Programmes** | Grille agrégée par programme × semaine, ouverture vers le détail filtré |
+| **Périmètres** | Grille agrégée par ligne de production × semaine, et **vue synthétique** en tableau croisé (production par parent, écart par composant en équivalent produit) |
 | **Références** | Grille agrégée par composant (écart cumulé, éq. produit, impact €, coef BOM, uniformité), recherche plein texte |
 | **Détail** | Grille ligne à ligne `parent × composant × semaine` — la granularité d'audit |
 | **Assistant IA** | Chat outillé (function calling) sur production, consommation, écarts, base article et nomenclature |
 
 Transverse à tous les écrans :
 
+- **Bascule valeur / quantité** — un seul bouton fait basculer indicateurs, graphiques, classements et vue synthétique entre l'euro et l'unité. Ce n'est pas un formatage : le tri suit la bascule côté serveur, sans quoi on lirait un classement en euros habillé d'unités.
 - **Timeline slicer** — brosse hebdomadaire sur l'histogramme des écarts valorisés, presets (4/8/13/26/52 semaines, YTD, tout), navigation clavier.
-- **Grilles serveur** — tri, pagination, filtres, sélection multiple, **copie presse-papiers** (TSV, collable dans Excel), **export XLSX**, **analyse IA du lot sélectionné**.
+- **Grilles serveur** — tri, pagination, filtres, sélection multiple, **pied de totaux** (calculés sur la sélection entière, pas sur la page), **copie presse-papiers** (TSV, collable dans Excel), **export XLSX**, **analyse IA du lot sélectionné**.
+- **Points de vigilance cliquables** — chaque contrôle qualité du bandeau ouvre les lignes qu'il dénonce, filtres déjà appliqués.
 - **Thème clair / sombre** avec palette de data-visualisation validée (voir §6).
 
 ---
@@ -104,7 +107,8 @@ pip install -r app/requirements.txt -r requirements-dev.txt
 # Option A — Postgres local avec jeu de données de démonstration
 docker run -d --name backflush-pg -e POSTGRES_PASSWORD=backflush -p 5432:5432 postgres:16
 export LAKEBASE_PG_URL="postgresql://postgres:backflush@localhost:5432/postgres"
-python -m src.jobs.seed_demo_data           # DDL + ~30 000 lignes réalistes
+python -m src.jobs.seed_demo_data           # DDL + ~15 000 lignes réalistes
+                                            # historique ancré au 30/03/2026, comme en production
 
 # Option B — Lakebase distant (OAuth via profil CLI Databricks)
 export DATABRICKS_CONFIG_PROFILE=DEFAULT

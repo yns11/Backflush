@@ -12,23 +12,33 @@ from typing import Literal
 from fastapi import APIRouter, Body
 
 from app.server.api.deps import RepositoryDep
+from app.server.core.errors import RequeteInvalideError
 from app.server.domain.filters import Filtres
 from app.server.domain.metrics import construire_indicateurs
 
 routeur = APIRouter(prefix="/api/analytique", tags=["analytique"])
 
+#: Mesure de classement et d'affichage. « valeur » raisonne en euros, « quantite »
+#: en unités : les deux classements diffèrent, et c'est précisément l'intérêt de
+#: la bascule.
+Mesure = Literal["valeur", "quantite"]
+
 
 @routeur.post("/indicateurs", summary="Indicateurs de synthèse et variation")
-def indicateurs(depot: RepositoryDep, filtres: Filtres = Body(...)) -> dict:
+def indicateurs(
+    depot: RepositoryDep, filtres: Filtres = Body(...), mesure: Mesure = "valeur",
+) -> dict:
     """Indicateurs de la période, comparés à la période précédente de même durée."""
     courant = depot.agregat(filtres)
     # Sans bornes de date, « la période précédente » n'a pas de définition : on
     # n'affiche alors aucune variation plutôt qu'une comparaison arbitraire.
     precedent = depot.agregat(filtres.periode_precedente()) if filtres.date_debut else None
     return {
-        "indicateurs": [ind.model_dump() for ind in construire_indicateurs(courant, precedent)],
+        "indicateurs": [
+            ind.model_dump() for ind in construire_indicateurs(courant, precedent, mesure)
+        ],
         "agregat": courant.__dict__,
-        "concentration": depot.concentration(filtres),
+        "concentration": depot.concentration(filtres, mesure=mesure),
         "comparaison_disponible": precedent is not None,
     }
 
@@ -51,16 +61,46 @@ def chronologie(depot: RepositoryDep, filtres: Filtres = Body(...)) -> dict:
 @routeur.post("/repartition/{dimension}", summary="Agrégat par dimension")
 def repartition(
     depot: RepositoryDep,
-    dimension: Literal["programme", "categorie", "type", "statut"],
+    dimension: Literal["programme", "perimetre", "categorie", "type", "statut"],
     filtres: Filtres = Body(...),
     limite: int = 20,
+    mesure: Mesure = "valeur",
 ) -> dict:
-    return {"dimension": dimension, "lignes": depot.repartition(filtres, dimension, limite)}
+    return {
+        "dimension": dimension,
+        "mesure": mesure,
+        "lignes": depot.repartition(filtres, dimension, limite, mesure),
+    }
 
 
 @routeur.post("/top-composants", summary="Composants par impact financier absolu")
-def top_composants(depot: RepositoryDep, filtres: Filtres = Body(...), limite: int = 10) -> dict:
-    return {"lignes": depot.top_composants(filtres, limite)}
+def top_composants(
+    depot: RepositoryDep,
+    filtres: Filtres = Body(...),
+    limite: int = 10,
+    mesure: Mesure = "valeur",
+) -> dict:
+    return {"mesure": mesure, "lignes": depot.top_composants(filtres, limite, mesure)}
+
+
+@routeur.post("/synthese-perimetre", summary="Vue synthétique d'un périmètre")
+def synthese_perimetre(
+    depot: RepositoryDep, filtres: Filtres = Body(...), mesure: Mesure = "quantite",
+) -> dict:
+    """Tableau croisé production × semaine et écart × semaine, pour UN périmètre.
+
+    La restriction à un périmètre unique n'est pas une commodité d'affichage :
+    l'écart en équivalent produit se rapporte au volume produit de la ligne. Le
+    cumuler sur deux lignes de production reviendrait à additionner des unités
+    différentes.
+    """
+    if len(filtres.perimetres) != 1:
+        raise RequeteInvalideError(
+            "La vue synthétique porte sur un périmètre unique : "
+            f"{len(filtres.perimetres)} sélectionné(s)."
+        )
+    return {"perimetre": filtres.perimetres[0], "mesure": mesure,
+            **depot.synthese_perimetre(filtres, mesure)}
 
 
 @routeur.post("/composant/{child_itemid}", summary="Fiche complète d'un composant")

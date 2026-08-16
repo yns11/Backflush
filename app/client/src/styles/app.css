@@ -518,6 +518,12 @@ textarea {
   grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
 }
 
+/* Trois cartes de même nature : seuil plus bas pour qu'elles tiennent sur une
+   ligne d'écran bureautique standard, et repli à deux puis une colonne. */
+.grille-graphiques--trois {
+  grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+}
+
 .legende {
   display: flex;
   flex-wrap: wrap;
@@ -932,6 +938,72 @@ textarea {
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border: 0;
+}
+
+/* --- Bascule valeur / quantité ------------------------------------------ */
+/* Deux états mutuellement exclusifs, affichés côte à côte : l'utilisateur voit
+   la mesure active ET son alternative, sans avoir à cliquer pour la découvrir. */
+.bascule {
+  display: inline-flex;
+  padding: 2px;
+  background: var(--survol);
+  border: 1px solid var(--bordure);
+  border-radius: var(--rayon-2);
+}
+
+.bascule__option {
+  padding: 4px 10px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--encre-secondaire);
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+  border-radius: calc(var(--rayon-2) - 2px);
+}
+
+.bascule__option[aria-pressed='true'] {
+  font-weight: 600;
+  color: var(--encre);
+  background: var(--fond-carte);
+  box-shadow: var(--ombre-1);
+}
+
+.bascule__option:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* --- Pied de totaux des grilles ----------------------------------------- */
+/* Collé en bas de la zone défilante : le total reste sous les yeux pendant le
+   parcours des lignes, ce qui est tout l'intérêt d'un pied de tableau. */
+.tableau__pied td {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  background: var(--fond-carte);
+  border-top: 2px solid var(--bordure);
+}
+
+/* --- Tableau croisé de la vue synthétique -------------------------------- */
+.tableau--croise td,
+.tableau--croise th {
+  white-space: nowrap;
+}
+
+.tableau__section td {
+  padding-top: var(--espace-3);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--encre-secondaire);
+  text-transform: uppercase;
+  background: var(--survol);
+}
+
+.tableau__total td {
+  background: var(--survol);
+  border-top: 1px solid var(--bordure);
 }
 
 @media (max-width: 900px) {

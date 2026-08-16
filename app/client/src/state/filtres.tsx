@@ -25,6 +25,7 @@ export const FILTRES_VIDES: Filtres = {
   date_debut: null,
   date_fin: null,
   programmes: [],
+  perimetres: [],
   categories: [],
   types_ecart: [],
   statuts_ligne: [],
@@ -57,6 +58,7 @@ const Contexte = createContext<ContexteFiltres | null>(null)
 /** Champs sérialisés dans l'URL, avec leur mode d'encodage. */
 const CHAMPS_LISTE = [
   'programmes',
+  'perimetres',
   'categories',
   'types_ecart',
   'statuts_ligne',

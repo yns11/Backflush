@@ -13,6 +13,7 @@ import os
 import pytest
 from fastapi.testclient import TestClient
 
+from app.server.domain.dictionary import GRILLES
 from app.server.main import app
 
 BASE_DISPONIBLE = bool(os.getenv("LAKEBASE_PG_URL"))
@@ -146,7 +147,9 @@ class TestAnalytique:
 
 @besoin_base
 class TestGrilles:
-    @pytest.mark.parametrize("cle", ["details", "composants", "programmes", "parents"])
+    @pytest.mark.parametrize(
+        "cle", ["details", "composants", "programmes", "perimetres", "parents"]
+    )
     def test_chaque_grille_renvoie_une_page_coherente(self, client: TestClient, cle: str) -> None:
         corps = client.post(f"/api/grilles/{cle}", json={"filtres": PERIODE, "taille": 10}).json()
         assert corps["total"] >= len(corps["lignes"])
@@ -160,10 +163,31 @@ class TestGrilles:
         page2 = client.post(
             "/api/grilles/composants", json={"filtres": PERIODE, "taille": 10, "page": 2}
         ).json()
-        cles1 = {(ligne["child_itemid"], ligne["parent_programme"]) for ligne in page1["lignes"]}
-        cles2 = {(ligne["child_itemid"], ligne["parent_programme"]) for ligne in page2["lignes"]}
-        assert not (cles1 & cles2)
+        # L'identité d'une ligne est celle déclarée par le dictionnaire : la
+        # vérifier sur une clé partielle produirait de faux positifs.
+        cle_ligne = GRILLES["composants"].cle_ligne
+
+        def cles(page: dict) -> set[tuple]:
+            return {tuple(ligne[champ] for champ in cle_ligne) for ligne in page["lignes"]}
+
+        assert not (cles(page1) & cles(page2))
         assert page1["total"] == page2["total"]
+
+    def test_l_identite_de_ligne_est_unique_sur_chaque_grille(self, client: TestClient) -> None:
+        """La ``cle_ligne`` du dictionnaire doit refléter le grain réel du SQL.
+
+        Une clé trop courte passe inaperçue jusqu'à ce que deux lignes
+        distinctes se confondent : sélection qui en coche deux, ligne qui
+        disparaît du rendu React, export incohérent avec l'écran.
+        """
+        for cle, grille in GRILLES.items():
+            page = client.post(
+                f"/api/grilles/{cle}", json={"filtres": PERIODE, "taille": 200}
+            ).json()
+            identites = [
+                tuple(ligne[champ] for champ in grille.cle_ligne) for ligne in page["lignes"]
+            ]
+            assert len(set(identites)) == len(identites), f"grille « {cle} »"
 
     def test_le_tri_est_applique_cote_serveur(self, client: TestClient) -> None:
         corps = client.post(
@@ -189,6 +213,21 @@ class TestGrilles:
             # donc structurellement supérieure à la seule quantité produite.
             assert ligne["conso_theorique"] >= ligne["qty_produite"]
 
+    def test_le_pied_de_grille_totalise_toute_la_selection(self, client: TestClient) -> None:
+        """Les totaux du pied portent sur la sélection, pas sur la page affichée.
+
+        Totaliser la page tromperait : additionner cinquante lignes sur dix
+        mille donne un chiffre juste sur un ensemble qui n'intéresse personne.
+        """
+        page = client.post(
+            "/api/grilles/details", json={"filtres": PERIODE, "taille": 10}
+        ).json()
+        totaux = page["totaux"]
+        assert totaux["nb_lignes"] == page["total"]
+        # Les dénombrements distincts ne sont pas la somme des colonnes.
+        assert totaux["nb_composants"] >= 1
+        assert 0 <= totaux["taux_conformite"] <= 100
+
     def test_le_presse_papiers_est_tabule(self, client: TestClient) -> None:
         corps = client.post(
             "/api/grilles/programmes/presse-papiers?lignes_max=5", json={"filtres": PERIODE}
@@ -208,6 +247,82 @@ class TestGrilles:
         # Signature d'une archive ZIP : un XLSX en est une.
         assert reponse.content[:2] == b"PK"
         assert "backflush_composants" in reponse.headers["content-disposition"]
+
+
+@besoin_base
+class TestMesure:
+    """La bascule valeur / quantité doit atteindre le SQL, pas seulement l'affichage."""
+
+    def test_les_indicateurs_changent_d_unite(self, client: TestClient) -> None:
+        euros = client.post("/api/analytique/indicateurs?mesure=valeur", json=PERIODE).json()
+        unites = client.post("/api/analytique/indicateurs?mesure=quantite", json=PERIODE).json()
+        par_cle = {i["cle"]: i for i in euros["indicateurs"]}
+        en_unites = {i["cle"]: i for i in unites["indicateurs"]}
+        assert par_cle["ecart_valorise_net"]["unite"] != en_unites["ecart_valorise_net"]["unite"]
+
+    @pytest.mark.parametrize(
+        ("mesure", "colonne"),
+        [("valeur", "ecart_valorise_absolu"), ("quantite", "ecart_absolu")],
+    )
+    def test_le_classement_suit_la_mesure(
+        self, client: TestClient, mesure: str, colonne: str
+    ) -> None:
+        """Sans cela, on lirait un classement en euros habillé d'unités.
+
+        Le tri porte sur la somme des |écarts|, pas sur |somme des écarts| :
+        dans un groupe, une non-consommation et une surconsommation
+        s'additionnent en volume d'anomalie au lieu de se compenser.
+        """
+        lignes = client.post(
+            f"/api/analytique/top-composants?limite=12&mesure={mesure}", json=PERIODE
+        ).json()["lignes"]
+        assert lignes, "Le jeu de test doit contenir des écarts."
+        impacts = [float(ligne[colonne]) for ligne in lignes]
+        assert impacts == sorted(impacts, reverse=True)
+
+
+@besoin_base
+class TestSynthesePerimetre:
+    @staticmethod
+    def _un_perimetre(client: TestClient) -> str:
+        options = client.get("/api/meta/filtres").json()
+        assert options["perimetres"], "Le jeu de test doit contenir au moins un périmètre."
+        return options["perimetres"][0]
+
+    def test_un_perimetre_unique_est_exige(self, client: TestClient) -> None:
+        reponse = client.post("/api/analytique/synthese-perimetre", json=PERIODE)
+        assert reponse.status_code == 422
+        assert "unique" in reponse.json()["erreur"]
+
+    def test_la_vue_croise_production_et_ecarts(self, client: TestClient) -> None:
+        perimetre = self._un_perimetre(client)
+        corps = client.post(
+            "/api/analytique/synthese-perimetre",
+            json={**PERIODE, "perimetres": [perimetre]},
+        ).json()
+        assert corps["perimetre"] == perimetre
+        assert corps["production"], "Un périmètre sans production ne serait pas exploitable."
+        for ligne in corps["production"]:
+            assert ligne["parent_itemid"] and ligne["annee"] and ligne["semaine"]
+        # Le bloc écart ne retient que les coefficients uniformes.
+        for ligne in corps["ecarts"]:
+            assert ligne["coef_bom"] is not None
+
+    def test_l_export_de_la_vue_synthetique(self, client: TestClient) -> None:
+        perimetre = self._un_perimetre(client)
+        reponse = client.post(
+            "/api/export/synthese-perimetre.xlsx",
+            json={"filtres": {**PERIODE, "perimetres": [perimetre]}, "mesure": "quantite"},
+        )
+        assert reponse.status_code == 200
+        assert reponse.content[:2] == b"PK"
+        assert "backflush_synthese" in reponse.headers["content-disposition"]
+
+    def test_l_export_refuse_une_selection_multiple(self, client: TestClient) -> None:
+        reponse = client.post(
+            "/api/export/synthese-perimetre.xlsx", json={"filtres": PERIODE}
+        )
+        assert reponse.status_code == 422
 
 
 @besoin_base

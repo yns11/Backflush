@@ -17,8 +17,10 @@ import { EtatErreur } from '@/components/Etats'
 import { SlicerTemporel } from '@/components/SlicerTemporel'
 import { TiroirFiche } from '@/components/TiroirFiche'
 import { PageGrille } from '@/pages/Grilles'
+import { PerimetreSynthetique } from '@/pages/PerimetreSynthetique'
 import { Synthese } from '@/pages/Synthese'
 import { FiltresProvider, useFiltres } from '@/state/filtres'
+import { BasculeMesure, MesureProvider } from '@/state/mesure'
 import { NavigationProvider, PAGES, useNavigation, type Page } from '@/state/navigation'
 import { useTheme } from '@/state/theme'
 
@@ -51,9 +53,11 @@ export function App() {
 
   return (
     <FiltresProvider options={options.data}>
-      <NavigationProvider>
-        <Coquille optionsChargement={options.isPending} />
-      </NavigationProvider>
+      <MesureProvider>
+        <NavigationProvider>
+          <Coquille optionsChargement={options.isPending} />
+        </NavigationProvider>
+      </MesureProvider>
     </FiltresProvider>
   )
 }
@@ -99,6 +103,7 @@ function Coquille({ optionsChargement }: { optionsChargement: boolean }) {
 
         {page === 'synthese' && <Synthese />}
         {page === 'programmes' && <PageGrille cle="programmes" onAnalyseIA={surAnalyseIA} />}
+        {page === 'perimetres' && <VuePerimetres onAnalyseIA={surAnalyseIA} />}
         {page === 'references' && <PageGrille cle="composants" onAnalyseIA={surAnalyseIA} />}
         {page === 'detail' && <PageGrille cle="details" onAnalyseIA={surAnalyseIA} />}
         {page === 'assistant' && (
@@ -136,6 +141,53 @@ function Coquille({ optionsChargement }: { optionsChargement: boolean }) {
   )
 }
 
+/**
+ * Écran « Périmètres » : la grille hebdomadaire, ou la vue synthétique.
+ *
+ * La vue synthétique n'est pas un autre écran mais une autre LECTURE des mêmes
+ * données : tableau croisé semaine × référence, à la manière du rapport
+ * d'atelier. Elle exige un périmètre unique — l'écart en équivalent produit s'y
+ * rapporte au volume produit d'une seule ligne de production.
+ */
+function VuePerimetres({
+  onAnalyseIA,
+}: {
+  onAnalyseIA: (question: string, reponse: ReponseAssistant) => void
+}) {
+  const { filtres } = useFiltres()
+  const [synthetique, setSynthetique] = useState(false)
+  const perimetreUnique = filtres.perimetres.length === 1
+
+  return (
+    <div className="pile">
+      <div className="rang" style={{ justifyContent: 'flex-end' }}>
+        <label
+          className="rang attenue"
+          title={
+            perimetreUnique
+              ? 'Bascule vers le tableau croisé production × semaine et écart × semaine.'
+              : "Sélectionnez un périmètre unique : l'écart en équivalent produit se rapporte au volume d'une seule ligne de production."
+          }
+        >
+          <input
+            type="checkbox"
+            checked={synthetique}
+            onChange={(evenement) => setSynthetique(evenement.target.checked)}
+          />
+          Vue synthétique
+          {!perimetreUnique && synthetique && ' — périmètre unique requis'}
+        </label>
+      </div>
+
+      {synthetique ? (
+        <PerimetreSynthetique />
+      ) : (
+        <PageGrille cle="perimetres" onAnalyseIA={onAnalyseIA} />
+      )}
+    </div>
+  )
+}
+
 function Entete({ themeSeulement = false }: { themeSeulement?: boolean }) {
   const { theme, basculer } = useTheme()
 
@@ -154,6 +206,7 @@ function Entete({ themeSeulement = false }: { themeSeulement?: boolean }) {
       {!themeSeulement && <Navigation />}
 
       <div className="entete__actions">
+        {!themeSeulement && <BasculeMesure />}
         <button
           type="button"
           className="bouton bouton--icone"

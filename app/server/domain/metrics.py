@@ -140,46 +140,72 @@ def fiabilite_backflush(agregat: AgregatBrut) -> float:
     return max(0.0, min(100.0, (1 - ratio) * 100))
 
 
+def fiabilite_backflush_quantite(agregat: AgregatBrut) -> float:
+    """Même indice, mesuré en unités plutôt qu'en euros.
+
+    ``non_consommation`` et ``surconsommation`` étant toutes deux exprimées en
+    valeur absolue, leur somme est bien la somme des |écarts| en quantité.
+    """
+    if agregat.conso_theorique <= 0:
+        return 0.0
+    ratio = (agregat.non_consommation + agregat.surconsommation) / agregat.conso_theorique
+    return max(0.0, min(100.0, (1 - ratio) * 100))
+
+
 def construire_indicateurs(
     courant: AgregatBrut,
     precedent: AgregatBrut | None = None,
+    mesure: str = "valeur",
 ) -> list[Indicateur]:
     """Produit la liste ordonnée des indicateurs de la page de synthèse.
 
-    L'ordre est celui de lecture : d'abord l'impact financier (le langage du
-    comité de direction), puis sa décomposition, puis la qualité de la mesure.
+    L'ordre est celui de lecture : d'abord l'impact (le langage du comité de
+    direction), puis sa décomposition, puis la qualité de la mesure.
+
+    ``mesure`` bascule les trois premiers indicateurs et la fiabilité entre
+    euros et unités. Ce n'est pas un simple changement d'unité d'affichage :
+    en euros, une référence chère domine le classement ; en unités, c'est une
+    visserie consommée par milliers. Les deux lectures sont légitimes et ne
+    désignent pas les mêmes actions.
     """
+    en_valeur = mesure != "quantite"
     def var(extracteur) -> tuple[float | None, float | None]:
         return _variation(extracteur(courant), extracteur(precedent) if precedent else None)
 
     definitions: list[tuple[str, str, float, str, Format, SensFavorable, str, tuple]] = [
         (
-            "ecart_valorise_net", "Écart net valorisé",
-            courant.ecart_valorise, "€", "euro", "neutre",
-            "Somme signée des écarts × coût standard. Positif = valeur non déduite du "
-            "stock (stock système surévalué) ; négatif = valeur consommée en excès.",
-            var(lambda a: a.ecart_valorise),
+            "ecart_valorise_net", "Écart net valorisé" if en_valeur else "Écart net",
+            courant.ecart_valorise if en_valeur else courant.ecart_net,
+            "€" if en_valeur else "unités", "euro" if en_valeur else "decimal", "neutre",
+            "Somme signée des écarts" + (" × coût standard" if en_valeur else "") + ". "
+            "Positif = quantité non déduite du stock (stock système surévalué) ; "
+            "négatif = consommation en excès.",
+            var(lambda a: a.ecart_valorise if en_valeur else a.ecart_net),
         ),
         (
             "non_consommation_valorisee", "Non-consommation",
-            courant.non_consommation_valorisee, "€", "euro", "baisse",
-            "Valeur des composants prévus par la nomenclature mais non déduits du "
-            "stock. Traduit un stock système supérieur au stock physique.",
-            var(lambda a: a.non_consommation_valorisee),
+            courant.non_consommation_valorisee if en_valeur else courant.non_consommation,
+            "€" if en_valeur else "unités", "euro" if en_valeur else "decimal", "baisse",
+            "Composants prévus par la nomenclature mais non déduits du stock. "
+            "Traduit un stock système supérieur au stock physique.",
+            var(lambda a: a.non_consommation_valorisee if en_valeur else a.non_consommation),
         ),
         (
             "surconsommation_valorisee", "Surconsommation",
-            courant.surconsommation_valorisee, "€", "euro", "baisse",
-            "Valeur des composants sortis au-delà du théorique : rebut non déclaré, "
-            "erreur de nomenclature, servitude non modélisée.",
-            var(lambda a: a.surconsommation_valorisee),
+            courant.surconsommation_valorisee if en_valeur else courant.surconsommation,
+            "€" if en_valeur else "unités", "euro" if en_valeur else "decimal", "baisse",
+            "Composants sortis au-delà du théorique : rebut non déclaré, erreur de "
+            "nomenclature, servitude non modélisée.",
+            var(lambda a: a.surconsommation_valorisee if en_valeur else a.surconsommation),
         ),
         (
             "fiabilite_backflush", "Fiabilité du backflush",
-            fiabilite_backflush(courant), "%", "pourcent", "hausse",
-            "100 % − (somme des |écarts| valorisés ÷ consommation théorique valorisée). "
-            "Les écarts de sens opposés ne se compensent pas.",
-            var(fiabilite_backflush),
+            fiabilite_backflush(courant) if en_valeur else fiabilite_backflush_quantite(courant),
+            "%", "pourcent", "hausse",
+            "100 % − (somme des |écarts| ÷ consommation théorique), "
+            + ("en valeur" if en_valeur else "en quantité")
+            + ". Les écarts de sens opposés ne se compensent pas.",
+            var(fiabilite_backflush if en_valeur else fiabilite_backflush_quantite),
         ),
         (
             "taux_conformite", "Taux de conformité",

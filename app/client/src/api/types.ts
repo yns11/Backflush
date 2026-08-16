@@ -8,13 +8,17 @@
 
 export type TypeEcart = 'Non-consommation' | 'Surconsommation' | 'Conforme'
 export type StatutLigne = 'Nominal' | 'Hors nomenclature' | 'Sans consommation'
-export type CleGrille = 'details' | 'composants' | 'programmes' | 'parents'
+export type CleGrille = 'details' | 'composants' | 'programmes' | 'perimetres' | 'parents'
+
+/** Mesure d'affichage et de classement : euros ou unités. */
+export type Mesure = 'valeur' | 'quantite'
 
 /** Sélection appliquée à toutes les vues. Miroir exact de `Filtres` côté Python. */
 export interface Filtres {
   date_debut: string | null
   date_fin: string | null
   programmes: string[]
+  perimetres: string[]
   categories: string[]
   types_ecart: TypeEcart[]
   statuts_ligne: StatutLigne[]
@@ -30,6 +34,7 @@ export interface Filtres {
 
 export interface OptionsFiltres {
   programmes: string[]
+  perimetres: string[]
   categories: string[]
   types_ecart: TypeEcart[]
   statuts_ligne: StatutLigne[]
@@ -83,6 +88,7 @@ export interface SemaineAgregee {
   nb_parents: number
   nb_composants: number
   nb_programmes: number
+  nb_perimetres: number
   nb_semaines: number
   conso_theorique: number
   conso_theorique_valorisee: number
@@ -95,6 +101,8 @@ export interface SemaineAgregee {
   non_consommation_valorisee: number
   surconsommation_valorisee: number
   ecart_valorise_absolu: number
+  /** Somme des |écarts| en unités — pendant de `ecart_valorise_absolu` en quantité. */
+  ecart_absolu: number
 }
 
 export interface LigneRepartition extends Omit<SemaineAgregee, 'semaine_debut' | 'annee' | 'semaine' | 'semaine_libelle'> {
@@ -144,6 +152,8 @@ export type LigneGrille = Record<string, unknown>
 
 export interface PageGrille {
   lignes: LigneGrille[]
+  /** Totaux de la sélection entière — jamais ceux de la page affichée. */
+  totaux: Record<string, number | null>
   total: number
   page: number
   taille: number
@@ -232,4 +242,36 @@ export interface FicheParent {
     unite: string | null
     std_cost_price: number | null
   }>
+}
+
+/** Une ligne du bloc « production » de la vue synthétique d'un périmètre. */
+export interface LigneProductionSynthese {
+  parent_itemid: string
+  parent_name: string | null
+  bomid: string | null
+  semaine_debut: string
+  annee: number
+  semaine: number
+  qty_produite: number
+  valeur_produite: number
+}
+
+/** Une ligne du bloc « écart de prélèvement » de la vue synthétique. */
+export interface LigneEcartSynthese {
+  child_itemid: string
+  child_name: string | null
+  coef_bom: number | null
+  semaine_debut: string
+  annee: number
+  semaine: number
+  ecart_equivalent_produit: number
+  ecart_valorise: number
+  ecart_brut: number
+}
+
+export interface SynthesePerimetre {
+  perimetre: string
+  mesure: Mesure
+  production: LigneProductionSynthese[]
+  ecarts: LigneEcartSynthese[]
 }

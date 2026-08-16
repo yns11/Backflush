@@ -16,7 +16,7 @@ import { useQuery } from '@tanstack/react-query'
 
 import { api, telechargerExport } from '@/api/client'
 import type { CleGrille, Colonne, Filtres, Grille, LigneGrille } from '@/api/types'
-import { valeurCellule } from '@/lib/format'
+import { nombre, valeurCellule } from '@/lib/format'
 import { EtatErreur, EtatVide, SqueletteLignes } from './Etats'
 
 const TAILLES_PAGE = [25, 50, 100, 250]
@@ -346,6 +346,11 @@ export function GrilleDonnees({
                 )
               })}
             </tbody>
+            <PiedTotaux
+              colonnes={colonnes}
+              totaux={requete.data?.totaux}
+              nbLignes={total}
+            />
           </table>
         )}
       </div>
@@ -389,6 +394,69 @@ export function GrilleDonnees({
         </label>
       </div>
     </div>
+  )
+}
+
+/**
+ * Pied de grille : totaux de la SÉLECTION ENTIÈRE.
+ *
+ * Un total de page induirait en erreur — additionner cinquante lignes sur dix
+ * mille ne veut rien dire. Les totaux viennent donc du serveur, calculés sur
+ * toute la sélection filtrée.
+ *
+ * Deux familles de colonnes n'ont pas de total : les identifiants et libellés
+ * (rien à additionner) et les taux, dont la moyenne des lignes n'est pas la
+ * valeur d'ensemble. Pour ces derniers, le serveur renvoie le taux recalculé
+ * sur la sélection, jamais une moyenne de moyennes.
+ */
+function PiedTotaux({
+  colonnes,
+  totaux,
+  nbLignes,
+}: {
+  colonnes: Colonne[]
+  totaux: Record<string, number | null> | undefined
+  nbLignes: number
+}) {
+  if (!totaux) return null
+  const cumulable = (colonne: Colonne) =>
+    ['euro', 'decimal', 'entier', 'pourcent'].includes(colonne.type) &&
+    totaux[colonne.cle] !== undefined &&
+    totaux[colonne.cle] !== null
+
+  if (!colonnes.some(cumulable)) return null
+
+  return (
+    <tfoot className="tableau__pied">
+      <tr>
+        <td className="tableau__case" />
+        {colonnes.map((colonne, index) => {
+          if (!cumulable(colonne)) {
+            // La première colonne non cumulable porte l'étiquette : sans elle,
+            // la ligne de totaux flotterait sans dire ce qu'elle totalise.
+            const etiquette = index === 0 || !colonnes.slice(0, index).some((c) => !cumulable(c))
+            return (
+              <td key={colonne.cle} className={classeAlignement(colonne)}>
+                {etiquette ? (
+                  <strong title={`Totaux calculés sur les ${nbLignes} lignes de la sélection, pas sur la page.`}>
+                    Total ({nombre(nbLignes)} lignes)
+                  </strong>
+                ) : null}
+              </td>
+            )
+          }
+          const valeur = totaux[colonne.cle] as number
+          return (
+            <td
+              key={colonne.cle}
+              className={`${classeAlignement(colonne)}${valeur < 0 ? ' cellule--negatif' : ''}`}
+            >
+              <strong>{valeurCellule(valeur, colonne.type, colonne.decimales)}</strong>
+            </td>
+          )
+        })}
+      </tr>
+    </tfoot>
   )
 }
 

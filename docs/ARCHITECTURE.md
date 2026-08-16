@@ -110,7 +110,34 @@ Deux tolérances, combinées en OU :
   limite réelle du seuil absolu : 0,5 unité sur une vis consommée par dizaines de
   milliers et 0,5 kg de résine ne mesurent pas la même chose.
 
-### 2.6 Réconciliation complète (`FULL OUTER JOIN`)
+### 2.6 Le périmètre est la maille de l'équivalent produit
+
+Le **périmètre** est la ligne de production du parent fabriqué
+(`silver_erp_ye.produits_fabriques.ligne_de_prod`). Un parent relève d'un seul
+périmètre, un périmètre d'un seul programme : le programme reste donc obtenu par
+somme, mais il n'est plus la maille de calcul.
+
+Deux calculs se font sur le périmètre, et non sur le programme :
+
+1. **L'uniformité du coefficient** (`dim_coef_perimetre`, ex-`dim_coef_programme`).
+   Un composant peut avoir un coefficient 4 sur une ligne et 6 sur une autre du
+   même programme : agrégé au programme, il apparaissait « non uniforme » et
+   sortait de l'analyse, alors qu'il est parfaitement uniforme *dans sa ligne*.
+2. **L'équivalent produit** (`écart ÷ coefficient`), qui n'a de sens que rapporté
+   au volume produit d'une ligne. Cumulé sur deux lignes, il additionnerait des
+   unités différentes — c'est la raison pour laquelle la vue synthétique impose
+   un périmètre unique, plutôt que de le suggérer.
+
+Conséquence sur le grain : `agg_ecart_hebdo_programme` descend au couple
+programme × périmètre. Les dénombrements distincts qu'il porte (`nb_parents`,
+`nb_composants`) ne sont dès lors **jamais additifs** entre périmètres et doivent
+être recalculés depuis la table de faits.
+
+Les articles sans ligne de production renseignée sont regroupés sous
+`NON RENSEIGNE` plutôt qu'écartés : une donnée source incomplète doit rester
+visible, sans quoi les totaux ne se réconcilient plus.
+
+### 2.7 Réconciliation complète (`FULL OUTER JOIN`)
 
 Le fait principal réconcilie l'attendu (production × nomenclature) et le réel
 (sorties de stock) par une **jointure complète**. Une jointure interne masquerait
@@ -122,7 +149,7 @@ les deux anomalies les plus coûteuses :
 | `Hors nomenclature` | Composant sorti sans ligne BOM | Erreur de saisie d'OF, nomenclature obsolète, substitution non tracée |
 | `Sans consommation` | Ligne BOM sans aucune sortie de la semaine | Backflush non exécuté, OF non clôturé |
 
-### 2.7 Performance
+### 2.8 Performance
 
 | Mécanisme | Effet |
 |---|---|
@@ -134,7 +161,7 @@ les deux anomalies les plus coûteuses :
 | `ANALYZE` avant la bascule | La première requête après ingestion planifie sur des statistiques fraîches |
 | Compression gzip des réponses | Une page de 500 lignes passe d'environ 400 ko à 80 ko |
 
-### 2.8 Chargement des `numeric` en flottant
+### 2.9 Chargement des `numeric` en flottant
 
 `psycopg.adapters.register_loader("numeric", FloatLoader)` — sérialisé en JSON,
 un `Decimal` devient une **chaîne**, que le frontend doit reconvertir à chaque

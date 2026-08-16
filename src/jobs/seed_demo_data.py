@@ -15,7 +15,7 @@ les tables du schéma cible.
 Usage ::
 
     export LAKEBASE_PG_URL="postgresql://postgres:backflush@localhost:5432/postgres"
-    python -m src.jobs.seed_demo_data --weeks 26
+    python -m src.jobs.seed_demo_data
 """
 
 from __future__ import annotations
@@ -44,6 +44,15 @@ from src.jobs.lakebase_schema import (
 
 LOGGER = logging.getLogger("backflush.seed")
 
+#: Premier lundi d'historique, quelle que soit la cible.
+#:
+#: Aligné sur la variable de bundle ``date_from`` (databricks.yml) : le jeu de
+#: démonstration doit couvrir la même fenêtre que la production, sinon les
+#: bornes du slicer temporel diffèrent entre l'environnement local et
+#: Databricks et l'on met au point l'application sur une période qui n'existe
+#: nulle part ailleurs.
+DEBUT_HISTORIQUE = date(2026, 3, 30)
+
 PROGRAMMES = ["M3", "M3GEN2", "M2BEV", "K9", "COMMUN"]
 CATEGORIES_COMPOSANT = ["VIS", "AIMANTS", "MEL", "ROULEMENT", "CABLE", "RESINE", "TOLE"]
 UNITES = {"MEL": "KG", "RESINE": "L"}
@@ -55,8 +64,14 @@ def iso_week_fields(monday: date) -> tuple[int, int]:
     return iso.year, iso.week
 
 
-def build_dataset(weeks: int, seed: int) -> dict[str, list[tuple[Any, ...]]]:
-    """Construit toutes les tables en mémoire. Déterministe pour un ``seed`` donné."""
+def build_dataset(
+    seed: int, *, depuis: date = DEBUT_HISTORIQUE, jusqu_a: date | None = None
+) -> dict[str, list[tuple[Any, ...]]]:
+    """Construit toutes les tables en mémoire. Déterministe pour un ``seed`` donné.
+
+    :param depuis: premier lundi d'historique (recalé sur le lundi de sa semaine).
+    :param jusqu_a: dernier lundi ; par défaut, la semaine en cours.
+    """
     rng = random.Random(seed)
     now = datetime.now(UTC)
 
@@ -152,8 +167,14 @@ def build_dataset(weeks: int, seed: int) -> dict[str, list[tuple[Any, ...]]]:
     ]
 
     # --- Production et consommation -----------------------------------------
-    lundi_courant = date.today() - timedelta(days=date.today().weekday())
-    semaines = [lundi_courant - timedelta(weeks=offset) for offset in range(weeks - 1, -1, -1)]
+    # L'historique est ancré sur une date FIXE, pas sur un nombre de semaines
+    # glissant : le jeu de démonstration doit débuter au même lundi que les
+    # données réelles, faute de quoi il dérive d'une semaine à chaque exécution.
+    premier = depuis - timedelta(days=depuis.weekday())
+    dernier = jusqu_a or date.today()
+    dernier -= timedelta(days=dernier.weekday())
+    nb_semaines = max(1, (dernier - premier).days // 7 + 1)
+    semaines = [premier + timedelta(weeks=offset) for offset in range(nb_semaines)]
 
     production: dict[tuple[date, str], Decimal] = {}
     for semaine in semaines:
@@ -399,6 +420,10 @@ def _quality_rows(fact: list[tuple[Any, ...]], now: datetime) -> list[tuple[Any,
          "Composants en écart sans coût standard : leur impact financier est compté pour 0 €."),
         ("coef_non_uniforme", "INFO", "Nomenclature", non_uniforme,
          "Couples (périmètre, composant) à coefficient non uniforme."),
+        # Le jeu de démonstration renseigne toujours la ligne de production : le
+        # contrôle est présent mais à zéro, ce qui reste sa valeur nominale.
+        ("parent_sans_perimetre", "ALERTE", "Référentiel", 0,
+         "Part de la production, en %, dont le parent n'a pas de ligne de production renseignée."),
         ("article_hors_referentiel", "ERREUR", "Référentiel", 0,
          "Composants mouvementés absents de dim_article."),
         ("reconciliation_agg_detail", "ERREUR", "Cohérence", 0,
@@ -471,7 +496,12 @@ def write(conn: psycopg.Connection, dataset: dict[str, list[tuple[Any, ...]]], p
 def main(argv: list[str] | None = None) -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)-7s %(message)s", stream=sys.stdout)
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--weeks", type=int, default=26, help="Nombre de semaines d'historique.")
+    parser.add_argument(
+        "--depuis",
+        type=date.fromisoformat,
+        default=DEBUT_HISTORIQUE,
+        help="Premier lundi d'historique (AAAA-MM-JJ). Défaut : %(default)s.",
+    )
     parser.add_argument("--seed", type=int, default=20260330, help="Graine aléatoire.")
     parser.add_argument("--pg-schema", default=SCHEMA)
     args = parser.parse_args(argv)
@@ -480,8 +510,8 @@ def main(argv: list[str] | None = None) -> None:
     if not url:
         raise RuntimeError("LAKEBASE_PG_URL doit être défini (Postgres de développement).")
 
-    LOGGER.info("Génération de %d semaines de données de démonstration…", args.weeks)
-    dataset = build_dataset(args.weeks, args.seed)
+    LOGGER.info("Génération des données de démonstration depuis le %s…", args.depuis)
+    dataset = build_dataset(args.seed, depuis=args.depuis)
     with psycopg.connect(url) as conn:
         write(conn, dataset, args.pg_schema)
     LOGGER.info("Jeu de démonstration prêt.")

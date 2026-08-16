@@ -20,8 +20,10 @@ import type {
   PageGrille,
   ReponseAssistant,
   ReponseIndicateurs,
+  Mesure,
   Sante,
   SemaineAgregee,
+  SynthesePerimetre,
 } from './types'
 
 /** Erreur d'API portant le code HTTP et le message métier renvoyé par le serveur. */
@@ -86,8 +88,8 @@ export const api = {
 
   fraicheur: () => appeler<Fraicheur>('/api/meta/fraicheur'),
 
-  indicateurs: (filtres: Filtres) =>
-    poster<ReponseIndicateurs>('/api/analytique/indicateurs', filtres),
+  indicateurs: (filtres: Filtres, mesure: Mesure = 'valeur') =>
+    poster<ReponseIndicateurs>(`/api/analytique/indicateurs?mesure=${mesure}`, filtres),
 
   tendance: (filtres: Filtres) =>
     poster<{ semaines: SemaineAgregee[] }>('/api/analytique/tendance', filtres),
@@ -95,17 +97,25 @@ export const api = {
   chronologie: (filtres: Filtres) =>
     poster<{ semaines: SemaineAgregee[] }>('/api/analytique/chronologie', filtres),
 
-  repartition: (dimension: 'programme' | 'categorie' | 'type' | 'statut', filtres: Filtres) =>
+  repartition: (
+    dimension: 'programme' | 'perimetre' | 'categorie' | 'type' | 'statut',
+    filtres: Filtres,
+    mesure: Mesure = 'valeur',
+  ) =>
     poster<{ dimension: string; lignes: LigneRepartition[] }>(
-      `/api/analytique/repartition/${dimension}`,
+      `/api/analytique/repartition/${dimension}?mesure=${mesure}`,
       filtres,
     ),
 
-  topComposants: (filtres: Filtres, limite = 10) =>
+  topComposants: (filtres: Filtres, limite = 10, mesure: Mesure = 'valeur') =>
     poster<{ lignes: LigneTopComposant[] }>(
-      `/api/analytique/top-composants?limite=${limite}`,
+      `/api/analytique/top-composants?limite=${limite}&mesure=${mesure}`,
       filtres,
     ),
+
+  /** Tableau croisé production × semaine et écart × semaine, pour UN périmètre. */
+  synthesePerimetre: (filtres: Filtres, mesure: Mesure = 'quantite') =>
+    poster<SynthesePerimetre>(`/api/analytique/synthese-perimetre?mesure=${mesure}`, filtres),
 
   ficheComposant: (childItemId: string, filtres: Filtres) =>
     poster<FicheComposant>(
@@ -159,7 +169,7 @@ export const api = {
  * l'horodatage) : on le lit dans l'en-tête `Content-Disposition` plutôt que de
  * le reconstruire, au risque de diverger.
  */
-export async function telechargerExport(
+export function telechargerExport(
   cle: CleGrille,
   corps: {
     filtres: Filtres
@@ -169,7 +179,32 @@ export async function telechargerExport(
     lignes_max?: number
   },
 ): Promise<{ nom: string; octets: number }> {
-  const reponse = await fetch(`/api/export/${cle}.xlsx`, {
+  return telecharger(`/api/export/${cle}.xlsx`, corps, `backflush_${cle}.xlsx`)
+}
+
+/**
+ * Télécharge le tableau croisé d'un périmètre.
+ *
+ * Le classeur est reconstruit côté serveur à partir des mêmes données que
+ * l'écran, mais avec des zéros explicites : une case vide obligerait le
+ * key-user à neutraliser les vides avant toute somme.
+ */
+export function telechargerSynthese(
+  corps: { filtres: Filtres; mesure: Mesure },
+): Promise<{ nom: string; octets: number }> {
+  return telecharger(
+    '/api/export/synthese-perimetre.xlsx',
+    corps,
+    'backflush_synthese.xlsx',
+  )
+}
+
+async function telecharger(
+  chemin: string,
+  corps: unknown,
+  nomDefaut: string,
+): Promise<{ nom: string; octets: number }> {
+  const reponse = await fetch(chemin, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(corps),
@@ -185,7 +220,7 @@ export async function telechargerExport(
   }
 
   const blob = await reponse.blob()
-  const nom = nomDepuisEntete(reponse.headers.get('Content-Disposition')) ?? `backflush_${cle}.xlsx`
+  const nom = nomDepuisEntete(reponse.headers.get('Content-Disposition')) ?? nomDefaut
 
   const url = URL.createObjectURL(blob)
   const lien = document.createElement('a')

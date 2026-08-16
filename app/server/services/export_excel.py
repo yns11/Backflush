@@ -29,6 +29,7 @@ from openpyxl.worksheet.dimensions import ColumnDimension
 
 from app.server.domain.dictionary import Colonne, Grille
 from app.server.domain.filters import Filtres
+from app.server.domain.synthese import SyntheseCroisee
 
 LOGGER = logging.getLogger("backflush.export")
 
@@ -38,6 +39,8 @@ _MILLIERS = "# ##0"
 _ENTETE_FOND = PatternFill("solid", fgColor="1F2937")
 _ENTETE_POLICE = Font(color="FFFFFF", bold=True, size=10)
 _ENTETE_ALIGNEMENT = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+_SECTION_FOND = PatternFill("solid", fgColor="E5E7EB")
 
 
 def format_colonne(colonne: Colonne) -> str:
@@ -87,6 +90,11 @@ def construire_classeur(
     classeur = Workbook(write_only=True)
     feuille = classeur.create_sheet(title=_titre_onglet(grille.libelle))
     _preparer_colonnes(feuille, selection)
+    # AVANT le premier append : en mode write_only, la vue de la feuille est
+    # sérialisée dès l'écriture de la première ligne ; fixer les volets ensuite
+    # est silencieusement sans effet. L'``auto_filter``, lui, est écrit après les
+    # données et peut donc attendre le décompte final.
+    feuille.freeze_panes = "A2"
 
     entete = []
     for colonne in selection:
@@ -114,7 +122,6 @@ def construire_classeur(
         feuille.append(cellules)
         nb_lignes += 1
 
-    feuille.freeze_panes = "A2"
     if nb_lignes:
         feuille.auto_filter.ref = f"A1:{get_column_letter(len(selection))}{nb_lignes + 1}"
 
@@ -168,10 +175,22 @@ def _ajouter_onglet_contexte(
         ("Lignes exportées", nb_lignes),
         ("Export tronqué", "Oui — affinez vos filtres" if tronque else "Non"),
         ("", ""),
+        *_lignes_filtres(filtres),
+        ("", ""),
+        ("DÉFINITION DES COLONNES", ""),
+    ]
+    lignes.extend((colonne.libelle, colonne.aide or "—") for colonne in colonnes)
+    _ecrire_contexte(feuille, lignes)
+
+
+def _lignes_filtres(filtres: Filtres) -> list[tuple[str, Any]]:
+    """Rappel des filtres appliqués — un export sans son contexte est illisible."""
+    return [
         ("FILTRES APPLIQUÉS", ""),
         ("Semaine du (lundi)", filtres.date_debut or "toutes"),
         ("Semaine au (lundi)", filtres.date_fin or "toutes"),
         ("Programmes", ", ".join(filtres.programmes) or "tous"),
+        ("Périmètres", ", ".join(filtres.perimetres) or "tous"),
         ("Catégories", ", ".join(filtres.categories) or "toutes"),
         ("Types d'écart", ", ".join(filtres.types_ecart) or "tous"),
         ("Statuts de ligne", ", ".join(filtres.statuts_ligne) or "tous"),
@@ -183,11 +202,10 @@ def _ajouter_onglet_contexte(
         ("Impact minimum (€)", filtres.impact_min if filtres.impact_min is not None else "—"),
         ("Coef. uniforme uniquement", "Oui" if filtres.coef_uniforme_uniquement else "Non"),
         ("Lignes conformes exclues", "Oui" if filtres.exclure_conforme else "Non"),
-        ("", ""),
-        ("DÉFINITION DES COLONNES", ""),
     ]
-    lignes.extend((colonne.libelle, colonne.aide or "—") for colonne in colonnes)
 
+
+def _ecrire_contexte(feuille, lignes: Sequence[tuple[str, Any]]) -> None:
     gras = Font(bold=True)
     for libelle, valeur in lignes:
         cellule_libelle = WriteOnlyCell(feuille, value=libelle)
@@ -211,3 +229,155 @@ def nom_fichier(grille: Grille, filtres: Filtres) -> str:
     fin = filtres.date_fin.isoformat() if filtres.date_fin else "fin"
     horodatage = datetime.now().strftime("%Y%m%d-%H%M")
     return f"backflush_{grille.cle}_{debut}_{fin}_{horodatage}.xlsx"
+
+
+# =============================================================================
+# Vue synthétique d'un périmètre — tableau croisé
+# =============================================================================
+
+def construire_classeur_synthese(
+    modele: SyntheseCroisee,
+    filtres: Filtres,
+    *,
+    perimetre: str,
+    en_valeur: bool,
+) -> io.BytesIO:
+    """Produit le classeur du tableau croisé production / écart.
+
+    Différence délibérée avec l'écran : **les zéros sont écrits**. À l'écran,
+    laisser la cellule vide allège une grille où l'essentiel des croisements est
+    nul ; dans un classeur destiné au calcul, une case vide oblige à écrire des
+    ``SI(ESTVIDE(...))`` partout. Le classeur porte donc des ``0`` numériques, et
+    les cellules restées vides ne le sont que là où la référence n'existait pas
+    encore dans la semaine considérée — c'est-à-dire nulle part, le pivot
+    remplissant toute la matrice.
+    """
+    format_ = f'{_MILLIERS}.00 "€"' if en_valeur else f"{_MILLIERS}.00"
+    unite = "€" if en_valeur else "unités"
+
+    classeur = Workbook(write_only=True)
+    feuille = classeur.create_sheet(title=_titre_onglet(f"Synthèse {perimetre}"))
+
+    largeurs = [22.0, 38.0, 14.0] + [11.0] * len(modele.semaines) + [14.0]
+    for index, largeur in enumerate(largeurs, start=1):
+        lettre = get_column_letter(index)
+        feuille.column_dimensions[lettre] = ColumnDimension(
+            feuille, index=lettre, width=largeur, customWidth=True
+        )
+
+    # Volets figés sur l'en-tête ET les trois colonnes d'identification : au-delà
+    # d'une dizaine de semaines, une ligne défilée sans sa référence est illisible.
+    # À poser avant le premier append (cf. construire_classeur).
+    feuille.freeze_panes = "D2"
+
+    libelles = ["Référence", "Désignation", "BOM / Coef."]
+    libelles += [semaine.libelle for semaine in modele.semaines]
+    libelles.append("Total")
+    entete = []
+    for libelle in libelles:
+        cellule = WriteOnlyCell(feuille, value=libelle)
+        cellule.fill = _ENTETE_FOND
+        cellule.font = _ENTETE_POLICE
+        cellule.alignment = _ENTETE_ALIGNEMENT
+        entete.append(cellule)
+    feuille.append(entete)
+
+    def section(titre: str) -> None:
+        cellules = [WriteOnlyCell(feuille, value=titre)]
+        cellules += [WriteOnlyCell(feuille, value=None) for _ in libelles[1:]]
+        for cellule in cellules:
+            cellule.fill = _SECTION_FOND
+            cellule.font = Font(bold=True)
+        feuille.append(cellules)
+
+    def ligne_chiffree(
+        reference: str,
+        designation: str,
+        complement: str,
+        valeurs: dict[str, float],
+        total: float,
+        *,
+        gras: bool = False,
+    ) -> None:
+        cellules = [
+            WriteOnlyCell(feuille, value=reference),
+            WriteOnlyCell(feuille, value=designation),
+            WriteOnlyCell(feuille, value=complement),
+        ]
+        for semaine in modele.semaines:
+            cellule = WriteOnlyCell(feuille, value=float(valeurs.get(semaine.cle, 0.0)))
+            cellule.number_format = format_
+            cellules.append(cellule)
+        cellule_total = WriteOnlyCell(feuille, value=float(total))
+        cellule_total.number_format = format_
+        cellules.append(cellule_total)
+        if gras:
+            for cellule in cellules:
+                cellule.font = Font(bold=True)
+        feuille.append(cellules)
+
+    section(f"1. PRODUCTION ({unite})")
+    for ligne in modele.production:
+        ligne_chiffree(
+            ligne.reference, ligne.designation, ligne.complement, ligne.valeurs, ligne.total
+        )
+    ligne_chiffree(
+        "TOTAL", "Total production", "",
+        modele.total_production, modele.total_production_periode, gras=True,
+    )
+
+    section(
+        f"2. ÉCART DE PRÉLÈVEMENT ({'€' if en_valeur else 'équivalent produit'})"
+    )
+    for ligne in modele.ecarts:
+        ligne_chiffree(
+            ligne.reference, ligne.designation, ligne.complement, ligne.valeurs, ligne.total
+        )
+
+    contexte = classeur.create_sheet(title="Contexte")
+    contexte.column_dimensions["A"] = ColumnDimension(contexte, index="A", width=34, customWidth=True)
+    contexte.column_dimensions["B"] = ColumnDimension(contexte, index="B", width=95, customWidth=True)
+    _ecrire_contexte(contexte, [
+        ("Extraction", "Vue synthétique d'un périmètre"),
+        ("Périmètre", perimetre),
+        ("Mesure", "Valeur (€)" if en_valeur else "Quantité (unités)"),
+        ("Généré le", datetime.now().replace(microsecond=0)),
+        ("Semaines", len(modele.semaines)),
+        ("Parents produits", len(modele.production)),
+        ("Composants en écart", len(modele.ecarts)),
+        ("Écart / volume produit (%)", round(modele.part_ecart_pct, 2)),
+        ("", ""),
+        *_lignes_filtres(filtres),
+        ("", ""),
+        ("LECTURE", ""),
+        ("1. PRODUCTION", "Une ligne par parent fabriqué du périmètre, puis le total."),
+        (
+            "2. ÉCART DE PRÉLÈVEMENT",
+            "Composants à coefficient uniforme uniquement. En quantité, l'écart est "
+            "exprimé en équivalent produit fabriqué : écart ÷ coefficient de "
+            "nomenclature, donc directement comparable au volume produit ci-dessus.",
+        ),
+        (
+            "Signe",
+            "Positif = non-consommation (théorique > réel). "
+            "Négatif = surconsommation (réel > théorique).",
+        ),
+    ])
+
+    flux = io.BytesIO()
+    classeur.save(flux)
+    flux.seek(0)
+    LOGGER.info(
+        "Export synthèse périmètre %s : %d semaine(s), %d parent(s), %d composant(s).",
+        perimetre, len(modele.semaines), len(modele.production), len(modele.ecarts),
+    )
+    return flux
+
+
+def nom_fichier_synthese(perimetre: str, filtres: Filtres) -> str:
+    """Nom de fichier autodescriptif pour la vue synthétique."""
+    debut = filtres.date_debut.isoformat() if filtres.date_debut else "debut"
+    fin = filtres.date_fin.isoformat() if filtres.date_fin else "fin"
+    horodatage = datetime.now().strftime("%Y%m%d-%H%M")
+    propre = "".join(c if c.isalnum() else "-" for c in perimetre).strip("-")[:40]
+    return f"backflush_synthese_{propre or 'perimetre'}_{debut}_{fin}_{horodatage}.xlsx"

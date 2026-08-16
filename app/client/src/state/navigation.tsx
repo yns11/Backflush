@@ -1,7 +1,7 @@
 /**
  * Navigation entre écrans, sans dépendance à un routeur.
  *
- * L'application compte cinq écrans et un tiroir de détail : un routeur complet
+ * L'application compte six écrans et un tiroir de détail : un routeur complet
  * apporterait plus de surface d'API que de valeur. La page active est reflétée
  * dans le chemin de l'URL (FastAPI renvoie `index.html` pour tout chemin
  * inconnu), et le bouton « Précédent » du navigateur fonctionne.
@@ -20,6 +20,7 @@ import {
 export const PAGES = {
   synthese: 'Synthèse',
   programmes: 'Programmes',
+  perimetres: 'Périmètres',
   references: 'Références',
   detail: 'Détail',
   assistant: 'Assistant IA',

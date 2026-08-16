@@ -33,10 +33,10 @@ class RequeteGrille(BaseModel):
 def page_grille(
     depot: RepositoryDep,
     settings: SettingsDep,
-    cle: Literal["details", "composants", "programmes", "parents"],
+    cle: Literal["details", "composants", "programmes", "perimetres", "parents"],
     requete: RequeteGrille = Body(...),
 ) -> dict:
-    return depot.grille(
+    page = depot.grille(
         cle,
         requete.filtres,
         tri=requete.tri,
@@ -45,13 +45,17 @@ def page_grille(
         taille=requete.taille,
         taille_max=settings.page_size_max,
     )
+    # Les totaux portent sur la SÉLECTION ENTIÈRE, pas sur la page : c'est le
+    # seul total qui ait un sens sous les yeux d'un gestionnaire de stock.
+    page["totaux"] = depot.totaux(requete.filtres)
+    return page
 
 
 @routeur.post("/{cle}/presse-papiers", summary="Extrait tabulé, prêt à coller dans Excel")
 def presse_papiers(
     depot: RepositoryDep,
     settings: SettingsDep,
-    cle: Literal["details", "composants", "programmes", "parents"],
+    cle: Literal["details", "composants", "programmes", "perimetres", "parents"],
     requete: RequeteGrille = Body(...),
     lignes_max: int = Query(default=5_000, ge=1, le=50_000),
 ) -> dict:

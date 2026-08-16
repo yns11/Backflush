@@ -21,7 +21,9 @@ fi
 
 if [ "${1:-}" = "--seed" ]; then
   echo "→ Génération du jeu de démonstration"
-  python -m src.jobs.seed_demo_data --weeks 26
+  # L'historique démarre au 30 mars 2026, comme en préproduction et en
+  # production (variable de bundle `date_from`) : le défaut du script.
+  python -m src.jobs.seed_demo_data
 fi
 
 echo "→ API sur http://127.0.0.1:8000 (documentation : /api/docs)"

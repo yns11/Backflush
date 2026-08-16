@@ -53,11 +53,38 @@ MESURES = """\
     COALESCE(SUM(GREATEST(f.ecart_valorise, 0)), 0)             AS non_consommation_valorisee,
     COALESCE(SUM(GREATEST(-f.ecart_valorise, 0)), 0)            AS surconsommation_valorisee,
     COALESCE(SUM(abs(f.ecart_valorise)), 0)                     AS ecart_valorise_absolu,
+    -- Impact absolu en quantité. Ce n'est PAS |ecart_net| : les non-consommations
+    -- et les surconsommations d'un même groupe se compenseraient, alors qu'elles
+    -- s'ajoutent en volume d'anomalie. C'est la grandeur sur laquelle le
+    -- classement est fait lorsque la mesure active est « quantite ».
+    COALESCE(SUM(abs(f.ecart_brut)), 0)                         AS ecart_absolu,
     COALESCE(SUM(f.ecart_equivalent_produit), 0)                AS ecart_equivalent_produit"""
 
 #: Libellé de semaine ISO lisible (2026-S14), calculé en base pour rester
 #: cohérent entre la grille, l'export et l'assistant.
 SEMAINE_LIBELLE = "f.annee::text || '-S' || lpad(f.semaine::text, 2, '0')"
+
+#: Expression d'impact selon la mesure choisie par l'utilisateur.
+#:
+#: L'application classe et trie par défaut en valeur (€). Basculer en quantité
+#: ne doit pas se contenter de changer l'affichage : un classement des dix
+#: premières références par euros n'est pas le même qu'en unités — une pièce à
+#: 3 000 € et une visserie à 0,02 € ne se croisent jamais dans le même ordre.
+#: Le tri suit donc la mesure, jusque dans la base.
+IMPACT_SQL = {
+    "valeur": "abs(f.ecart_valorise)",
+    "quantite": "abs(f.ecart_brut)",
+}
+
+
+def expression_impact(mesure: str) -> str:
+    """Expression d'agrégation du classement, pour la mesure demandée."""
+    if mesure not in IMPACT_SQL:
+        raise RequeteInvalideError(
+            f"Mesure inconnue : {mesure}. Attendu : {', '.join(sorted(IMPACT_SQL))}."
+        )
+    return f"COALESCE(SUM({IMPACT_SQL[mesure]}), 0)"
+
 
 #: Dimensions autorisées pour une répartition. Liste blanche stricte.
 DIMENSIONS = {
@@ -268,13 +295,16 @@ class Repository:
         """
         return self._fetch(sql, predicat.params)
 
-    def repartition(self, filtres: Filtres, dimension: str, limite: int = 20) -> list[dict[str, Any]]:
-        """Agrégat par dimension (programme, catégorie, type d'écart, statut)."""
+    def repartition(
+        self, filtres: Filtres, dimension: str, limite: int = 20, mesure: str = "valeur",
+    ) -> list[dict[str, Any]]:
+        """Agrégat par dimension (programme, périmètre, catégorie, type, statut)."""
         if dimension not in DIMENSIONS:
             raise RequeteInvalideError(
                 f"Dimension inconnue : {dimension}. Attendu : {', '.join(sorted(DIMENSIONS))}."
             )
         expression = DIMENSIONS[dimension] or f"({expression_type_ecart()})"
+        classement = expression_impact(mesure)
         predicat = construire_predicat(filtres)
         params = {**predicat.params, "limite": _borne(limite, 1, 200)}
         sql = f"""
@@ -283,13 +313,16 @@ class Repository:
             FROM {FACT} f
             WHERE {predicat.sql}
             GROUP BY 1
-            ORDER BY COALESCE(SUM(abs(f.ecart_valorise)), 0) DESC
+            ORDER BY {classement} DESC
             LIMIT %(limite)s
         """
         return self._fetch(sql, params)
 
-    def top_composants(self, filtres: Filtres, limite: int = 10) -> list[dict[str, Any]]:
-        """Composants classés par impact financier absolu."""
+    def top_composants(
+        self, filtres: Filtres, limite: int = 10, mesure: str = "valeur",
+    ) -> list[dict[str, Any]]:
+        """Composants classés par impact absolu, en valeur ou en quantité."""
+        classement = expression_impact(mesure)
         predicat = construire_predicat(filtres)
         params = {**predicat.params, "limite": _borne(limite, 1, 100)}
         sql = f"""
@@ -301,24 +334,27 @@ class Repository:
             FROM {FACT} f
             WHERE {predicat.sql}
             GROUP BY f.child_itemid, f.parent_programme
-            ORDER BY COALESCE(SUM(abs(f.ecart_valorise)), 0) DESC
+            ORDER BY {classement} DESC
             LIMIT %(limite)s
         """
         return self._fetch(sql, params)
 
-    def concentration(self, filtres: Filtres, tete: int = 10) -> dict[str, Any]:
+    def concentration(
+        self, filtres: Filtres, tete: int = 10, mesure: str = "valeur",
+    ) -> dict[str, Any]:
         """Part des ``tete`` premières références dans l'impact absolu total.
 
         Un chiffre de concentration élevé est une bonne nouvelle opérationnelle :
         il signifie que corriger quelques références résout l'essentiel du
         problème. C'est l'équivalent d'une analyse ABC de stock.
         """
+        classement = expression_impact(mesure)
         predicat = construire_predicat(filtres)
         params = {**predicat.params, "tete": _borne(tete, 1, 100)}
         sql = f"""
             WITH par_composant AS (
                 SELECT f.child_itemid,
-                       COALESCE(SUM(abs(f.ecart_valorise)), 0) AS impact
+                       {classement} AS impact
                 FROM {FACT} f
                 WHERE {predicat.sql}
                 GROUP BY f.child_itemid
@@ -342,6 +378,107 @@ class Repository:
             "impact_tete": tete_valeur,
             "part_tete_pct": (tete_valeur / total * 100) if total else 0.0,
         }
+
+
+    def totaux(self, filtres: Filtres) -> dict[str, Any]:
+        """Totaux de la sélection ENTIÈRE, pour le pied de page des grilles.
+
+        Ce ne sont pas les totaux de la page affichée : additionner cinquante
+        lignes sur dix mille tromperait plus qu'il n'informerait. Les
+        dénombrements distincts (parents, composants) ne sont pas non plus la
+        somme des colonnes — ils sont recalculés sur toute la sélection, sans
+        quoi un parent présent dans trois semaines serait compté trois fois.
+
+        La quantité produite est dédoublonnée par (parent, semaine) avant
+        sommation : elle est répétée sur chaque ligne de composant.
+        """
+        predicat = construire_predicat(filtres)
+        sql = f"""
+            WITH production AS (
+                SELECT f.parent_itemid, f.semaine_debut,
+                       MAX(f.qty_parent_produite) AS qty_semaine
+                FROM {FACT} f
+                WHERE {predicat.sql}
+                GROUP BY f.parent_itemid, f.semaine_debut
+            )
+            SELECT {MESURES.format(type_expr=expression_type_ecart())},
+                   (SELECT COALESCE(SUM(qty_semaine), 0) FROM production) AS qty_produite,
+                   CASE WHEN COUNT(*) > 0
+                        THEN (COUNT(*) - COUNT(*) FILTER (WHERE ({expression_type_ecart()}) <> 'Conforme'))::numeric
+                             / COUNT(*) * 100 END AS taux_conformite,
+                   CASE WHEN SUM(f.conso_theorique) > 0
+                        THEN SUM(f.ecart_brut) / SUM(f.conso_theorique) * 100 END
+                                                  AS ecart_pct_global
+            FROM {FACT} f
+            WHERE {predicat.sql}
+        """
+        return self._fetch_one(sql, predicat.params) or {}
+
+    # -- Vue synthétique d'un périmètre ------------------------------------
+    def synthese_perimetre(self, filtres: Filtres, mesure: str = "quantite") -> dict[str, Any]:
+        """Production par parent et écarts par composant, croisés aux semaines.
+
+        Restitution en tableau croisé, à l'image du rapport de pilotage de
+        l'atelier : une ligne par parent produit, une colonne par semaine, puis
+        une ligne par composant en écart.
+
+        Le bloc « écart » ne retient que les composants à **coefficient
+        uniforme** dans le périmètre : ce sont les seuls dont l'écart se
+        convertit en équivalent produit sans ambiguïté. Les autres restent
+        visibles dans les grilles de détail — les masquer ici évite d'afficher
+        une conversion qui n'a pas de sens physique.
+        """
+        if mesure not in IMPACT_SQL:
+            raise RequeteInvalideError(f"Mesure inconnue : {mesure}.")
+        predicat = construire_predicat(filtres)
+
+        # La production est portée par la ligne de composant : on la
+        # dédoublonne par (parent, semaine) avant toute sommation.
+        production = self._fetch(f"""
+            WITH parsemaine AS (
+                SELECT f.parent_itemid,
+                       f.semaine_debut,
+                       f.annee,
+                       f.semaine,
+                       MAX(f.parent_name)          AS parent_name,
+                       MAX(f.qty_parent_produite)  AS qty_produite
+                FROM {FACT} f
+                WHERE {predicat.sql}
+                GROUP BY f.parent_itemid, f.semaine_debut, f.annee, f.semaine
+            )
+            SELECT p.parent_itemid,
+                   p.parent_name,
+                   p.semaine_debut,
+                   p.annee,
+                   p.semaine,
+                   p.qty_produite,
+                   p.qty_produite * COALESCE(a.std_cost_price, 0) AS valeur_produite,
+                   b.bomid
+            FROM parsemaine p
+            LEFT JOIN dim_article a ON a.item_id = p.parent_itemid
+            LEFT JOIN (
+                SELECT parent_itemid, MIN(bomid) AS bomid
+                FROM dim_nomenclature GROUP BY parent_itemid
+            ) b ON b.parent_itemid = p.parent_itemid
+            ORDER BY p.parent_itemid, p.semaine_debut
+        """, predicat.params)
+
+        ecarts = self._fetch(f"""
+            SELECT f.child_itemid,
+                   MAX(f.child_name)                        AS child_name,
+                   MIN(f.coef_bom)                          AS coef_bom,
+                   f.semaine_debut,
+                   f.annee,
+                   f.semaine,
+                   COALESCE(SUM(f.ecart_equivalent_produit), 0) AS ecart_equivalent_produit,
+                   COALESCE(SUM(f.ecart_valorise), 0)           AS ecart_valorise,
+                   COALESCE(SUM(f.ecart_brut), 0)               AS ecart_brut
+            FROM {FACT} f
+            WHERE {predicat.sql} AND f.is_coef_uniforme
+            GROUP BY f.child_itemid, f.semaine_debut, f.annee, f.semaine
+            ORDER BY f.child_itemid, f.semaine_debut
+        """, predicat.params)
+        return {"production": production, "ecarts": ecarts}
 
     # -- Grilles -----------------------------------------------------------
     def grille(

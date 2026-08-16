@@ -8,6 +8,7 @@
 | Node.js | ≥ 20, pour compiler le frontend |
 | Projet Lakebase | Une instance avec une branche et un endpoint actifs |
 | Unity Catalog | `USE CATALOG`, `USE SCHEMA`, `CREATE TABLE` sur le schéma cible ; `SELECT` sur les tables bronze et silver |
+| Tables silver requises | `silver_bom`, `silver_base_article`, `produits_fabriques` (colonnes `ref_parent`, `item_name`, `type`, `ligne_de_prod` — source du **périmètre**) |
 | Endpoint de serving | Un modèle de fondation accessible, pour l'assistant IA |
 
 ### Contrôle préalable
@@ -282,6 +283,33 @@ WHERE en_anomalie
 ORDER BY severite;
 ```
 
+### Montée de version du modèle : le pipeline est obligatoire
+
+Un `bundle deploy` ne touche ni Unity Catalog ni Lakebase. Lorsque **le modèle
+change** — nouvelle colonne, table renommée — l'application déployée interroge
+des tables que l'ingestion précédente n'a pas produites, et renvoie des erreurs
+SQL sur les seules routes concernées.
+
+À l'introduction de l'axe **périmètre**, le modèle a changé ainsi :
+
+| Changement | Objet |
+|---|---|
+| Table renommée | `dim_coef_programme` → `dim_coef_perimetre` (clé `perimetre` + `child_itemid`) |
+| Colonnes ajoutées | `dim_article.perimetre`, `dim_article.type_produit`, `fact_ecart_backflush.parent_perimetre`, `fact_production_parent.parent_perimetre`, `agg_*.perimetre` |
+| Source ajoutée | `silver_erp_ye.produits_fabriques` |
+
+Séquence à respecter :
+
+```bash
+./scripts/build_frontend.sh
+databricks bundle deploy       -t <cible> --profile <PROFIL>
+databricks bundle run backflush_pipeline -t <cible> --profile <PROFIL>   # ← indispensable
+```
+
+L'ancienne table `dim_coef_programme` n'est plus alimentée ; elle subsiste dans
+Unity Catalog et dans Lakebase jusqu'à suppression manuelle. La laisser est sans
+effet sur l'application — plus rien ne la lit.
+
 ## 5. Droits Postgres du principal de service
 
 ⚠️ **Étape obligatoire, à faire une seule fois.** Le job réattribue `SELECT` sur
@@ -410,6 +438,9 @@ Puis, sur l'URL de l'application :
 | Première requête lente après une période creuse | Instance Lakebase mise à l'échelle zéro | Attendu ; le pre-ping du pool absorbe le réveil |
 | Assistant en `503` | Ressource `serving-endpoint` absente, ou principal de service sans `CAN_QUERY` | Attacher la ressource, accorder le droit |
 | Job en échec sur `article_hors_referentiel` | Des composants mouvementés manquent dans `silver_base_article` | Corriger la source ; en dernier recours, `--no-fail-on-dq-error` pour débloquer, en sachant que les chiffres sont incomplets |
+| `relation "dim_coef_perimetre" does not exist`, ou colonne `parent_perimetre` inconnue | Le bundle a été déployé sans relancer le pipeline après la montée de version du modèle | `databricks bundle run backflush_pipeline` (§4) |
+| Tous les périmètres valent `NON RENSEIGNE` | `produits_fabriques.ligne_de_prod` vide, ou `ref_parent` ne correspond pas aux `item_id` des parents | Vérifier la source ; le contrôle `parent_sans_perimetre` de `dq_controles` le quantifie |
+| Le job gold échoue sur une colonne absente de `produits_fabriques` | Le contrat de colonnes attendu (`src/jobs/build_gold.py`, `COLONNES_SOURCE`) n'est pas satisfait | Aligner la source ou le contrat — l'échec au démarrage est délibéré, il vaut mieux qu'un modèle silencieusement faux |
 
 ## 8. Passage en production
 

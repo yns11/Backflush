@@ -136,6 +136,24 @@ WITH controles AS (
 
     UNION ALL
 
+    -- 6 ter. Parents produits sans ligne de production renseignée.
+    --    Ils restent dans le modèle sous le périmètre « NON RENSEIGNE » — les
+    --    écarter fausserait les totaux — mais ils échappent à l'analyse par
+    --    périmètre et à la vue synthétique. Mesuré en QUANTITÉ produite, comme
+    --    la couverture de nomenclature : c'est le poids qui compte, pas le
+    --    nombre de références.
+    SELECT
+        'parent_sans_perimetre', 'ALERTE', 'Référentiel',
+        CAST(ROUND(
+            100.0 * SUM(CASE WHEN parent_perimetre = 'NON RENSEIGNE' THEN qty_produite ELSE 0 END)
+                  / NULLIF(SUM(qty_produite), 0)
+        ) AS BIGINT),
+        0,
+        'Part de la production, en %, dont le parent n''a pas de ligne de production renseignée dans produits_fabriques. Ces volumes sont regroupés sous le périmètre « NON RENSEIGNE ».'
+    FROM {catalog}.{schema}.fact_production_parent
+
+    UNION ALL
+
     -- 7. Coefficients non uniformes : l'équivalent produit n'est pas calculable.
     SELECT
         'coef_non_uniforme', 'INFO', 'Nomenclature',

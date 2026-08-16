@@ -144,7 +144,10 @@ GRILLE_COMPOSANTS = Grille(
         "Un composant peut être sain sur un programme et dériver sur un autre : "
         "l'agrégation conserve donc l'axe programme."
     ),
-    cle_ligne=["child_itemid", "parent_perimetre"],
+    # Le grain complet de la grille : le périmètre ne suffit pas à impliquer le
+    # programme, car les parents dont la ligne de production est inconnue sont
+    # tous regroupés sous « NON RENSEIGNE », tous programmes confondus.
+    cle_ligne=["child_itemid", "parent_programme", "parent_perimetre"],
     tri_defaut="ecart_valorise_absolu",
     colonnes=[
         Colonne(cle="child_itemid", libelle="Réf. composant", type="texte", largeur=150),

@@ -19,35 +19,65 @@ import { BarresDivergentes, type ElementBarre } from '@/components/charts/Barres
 import { TendanceHebdo } from '@/components/charts/TendanceHebdo'
 import { euro, nombre, pourcent } from '@/lib/format'
 import { useFiltres } from '@/state/filtres'
+import { useMesure } from '@/state/mesure'
 import { useNavigation } from '@/state/navigation'
 
 export function Synthese() {
   const { filtres, modifier } = useFiltres()
   const { aller, ouvrirFiche } = useNavigation()
+  const { mesure, enValeur } = useMesure()
+
+  /**
+   * Grandeur portée par les barres, selon la mesure active.
+   *
+   * En euros comme en unités, la valeur reste SIGNÉE : le signe encode la
+   * polarité de l'écart (non-consommation vs surconsommation), qui est la
+   * lecture métier. Seul le classement, lui, se fait sur la valeur absolue —
+   * il est décidé côté serveur.
+   */
+  const impact = (ligne: { ecart_valorise: number; ecart_net: number }) =>
+    Number(enValeur ? ligne.ecart_valorise : ligne.ecart_net)
+  const formaterImpact = (valeur: number) =>
+    enValeur ? euro(valeur, 0, true) : nombre(valeur, 0)
+  /**
+   * Impact ABSOLU du groupe, dans l'unité active.
+   *
+   * Ce n'est pas la valeur absolue de l'impact net : dans un même groupe, une
+   * non-consommation et une surconsommation se compenseraient, alors qu'elles
+   * s'additionnent en volume d'anomalie. Le serveur fournit les deux sommes ;
+   * il suffit de lire la bonne — utiliser celle en euros en mode quantité
+   * afficherait un montant sous un libellé d'unités.
+   */
+  const impactAbsolu = (ligne: { ecart_valorise_absolu: number; ecart_absolu: number }) =>
+    Number(enValeur ? ligne.ecart_valorise_absolu : ligne.ecart_absolu)
 
   const indicateurs = useQuery({
-    queryKey: ['indicateurs', filtres],
-    queryFn: () => api.indicateurs(filtres),
+    queryKey: ['indicateurs', filtres, mesure],
+    queryFn: () => api.indicateurs(filtres, mesure),
   })
   const tendance = useQuery({
     queryKey: ['tendance', filtres],
     queryFn: () => api.tendance(filtres),
   })
   const programmes = useQuery({
-    queryKey: ['repartition', 'programme', filtres],
-    queryFn: () => api.repartition('programme', filtres),
+    queryKey: ['repartition', 'programme', filtres, mesure],
+    queryFn: () => api.repartition('programme', filtres, mesure),
+  })
+  const perimetres = useQuery({
+    queryKey: ['repartition', 'perimetre', filtres, mesure],
+    queryFn: () => api.repartition('perimetre', filtres, mesure),
   })
   const categories = useQuery({
-    queryKey: ['repartition', 'categorie', filtres],
-    queryFn: () => api.repartition('categorie', filtres),
+    queryKey: ['repartition', 'categorie', filtres, mesure],
+    queryFn: () => api.repartition('categorie', filtres, mesure),
   })
   const statuts = useQuery({
     queryKey: ['repartition', 'statut', filtres],
     queryFn: () => api.repartition('statut', filtres),
   })
   const top = useQuery({
-    queryKey: ['top-composants', filtres],
-    queryFn: () => api.topComposants(filtres, 12),
+    queryKey: ['top-composants', filtres, mesure],
+    queryFn: () => api.topComposants(filtres, 12, mesure),
   })
 
   const periode =
@@ -132,7 +162,7 @@ export function Synthese() {
         </VueDonnees>
       </Carte>
 
-      <div className="grille-graphiques grille-graphiques--deux">
+      <div className="grille-graphiques grille-graphiques--trois">
         <Carte
           titre="Impact par programme"
           message="Cliquer pour filtrer et descendre au détail"
@@ -159,13 +189,13 @@ export function Synthese() {
                   (ligne): ElementBarre => ({
                     cle: ligne.libelle,
                     libelle: ligne.libelle,
-                    valeur: Number(ligne.ecart_valorise),
+                    valeur: impact(ligne),
                     details: [
                       { libelle: 'Lignes en écart', valeur: nombre(Number(ligne.nb_lignes_ecart)) },
                       { libelle: 'Composants', valeur: nombre(Number(ligne.nb_composants)) },
                       {
                         libelle: 'Impact absolu',
-                        valeur: euro(Number(ligne.ecart_valorise_absolu), 0, true),
+                        valeur: formaterImpact(impactAbsolu(ligne)),
                       },
                     ],
                   }),
@@ -173,6 +203,53 @@ export function Synthese() {
                 onSelection={(element) => {
                   modifier({ programmes: [element.cle] })
                   aller('programmes')
+                }}
+              />
+            )}
+          </VueDonnees>
+        </Carte>
+
+        <Carte
+          titre="Impact par périmètre"
+          message="Cliquer pour filtrer et descendre au détail"
+          aide="Le périmètre est la ligne de production du parent fabriqué. C'est la maille sur laquelle l'écart en équivalent produit est calculable."
+          legende={
+            <Legende
+              items={[
+                { libelle: 'Non-consommation', couleur: 'var(--pole-non-conso)' },
+                { libelle: 'Surconsommation', couleur: 'var(--pole-surconso)' },
+              ]}
+            />
+          }
+        >
+          <VueDonnees
+            chargement={perimetres.isPending}
+            erreur={perimetres.error}
+            donnees={perimetres.data}
+            estVide={(donnees) => donnees.lignes.length === 0}
+            onReessayer={() => void perimetres.refetch()}
+            squelette={<Squelette hauteur={200} />}
+          >
+            {(donnees) => (
+              <BarresDivergentes
+                elements={donnees.lignes.slice(0, 12).map(
+                  (ligne): ElementBarre => ({
+                    cle: ligne.libelle,
+                    libelle: ligne.libelle,
+                    valeur: impact(ligne),
+                    details: [
+                      { libelle: 'Lignes en écart', valeur: nombre(Number(ligne.nb_lignes_ecart)) },
+                      { libelle: 'Composants', valeur: nombre(Number(ligne.nb_composants)) },
+                      {
+                        libelle: 'Impact absolu',
+                        valeur: formaterImpact(impactAbsolu(ligne)),
+                      },
+                    ],
+                  }),
+                )}
+                onSelection={(element) => {
+                  modifier({ perimetres: [element.cle] })
+                  aller('perimetres')
                 }}
               />
             )}
@@ -194,7 +271,7 @@ export function Synthese() {
                   (ligne): ElementBarre => ({
                     cle: ligne.libelle,
                     libelle: ligne.libelle,
-                    valeur: Number(ligne.ecart_valorise),
+                    valeur: impact(ligne),
                     details: [
                       { libelle: 'Lignes en écart', valeur: nombre(Number(ligne.nb_lignes_ecart)) },
                     ],
@@ -229,7 +306,7 @@ export function Synthese() {
                   (ligne): ElementBarre => ({
                     cle: `${ligne.child_itemid}§${ligne.parent_programme}`,
                     libelle: `${ligne.child_itemid} · ${ligne.parent_programme}`,
-                    valeur: Number(ligne.ecart_valorise),
+                    valeur: impact(ligne),
                     reference: ligne.child_itemid,
                     details: [
                       { libelle: 'Désignation', valeur: ligne.child_name ?? '—' },

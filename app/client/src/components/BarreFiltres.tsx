@@ -58,6 +58,12 @@ export function BarreFiltres({ options }: { options: OptionsFiltres | undefined 
         onChangement={(valeurs) => modifier({ programmes: valeurs })}
       />
       <SelecteurMultiple
+        libelle="Périmètre"
+        options={options?.perimetres ?? []}
+        valeurs={filtres.perimetres}
+        onChangement={(valeurs) => modifier({ perimetres: valeurs })}
+      />
+      <SelecteurMultiple
         libelle="Catégorie composant"
         options={options?.categories ?? []}
         valeurs={filtres.categories}
