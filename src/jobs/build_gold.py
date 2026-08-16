@@ -73,6 +73,37 @@ LOGGER = logging.getLogger("backflush.build_gold")
 #: Répertoire des scripts SQL, résolu depuis la racine détectée.
 SQL_DIR = RACINE / "src" / "sql" / "gold"
 
+#: Colonnes que `01_src_views.sql` lit dans chaque table source.
+#:
+#: Cette liste EST le contrat avec l'ERP. Elle est vérifiée avant d'exécuter
+#: quoi que ce soit, pour deux raisons :
+#:
+#: 1. Un nom de colonne divergent ne se découvre sinon qu'à l'exécution, une
+#:    erreur à la fois — chaque correction demandant un nouveau cycle complet de
+#:    déploiement et de relance. Le contrôle préalable les remonte TOUTES d'un
+#:    coup, avec la liste des colonnes réellement disponibles.
+#: 2. Elle documente, en un seul endroit, ce que ce modèle attend de l'amont.
+#:
+#: Toute modification ici doit rester synchrone avec `01_src_views.sql`.
+COLONNES_SOURCE: dict[str, tuple[str, ...]] = {
+    "bronze.invent_trans": (
+        "inventtransorigin", "itemid", "qty", "datephysical", "dataareaid",
+    ),
+    "bronze.invent_trans_origin": (
+        "recid", "referencecategory", "referenceid", "itemid", "dataareaid",
+    ),
+    "bronze.prod_table": ("prodid", "itemid", "dataareaid"),
+    "silver.silver_bom": (
+        "bomid", "parent_itemid", "bom_version_name", "statut", "child_itemid",
+        "child_qty", "child_unitid", "parent_physical_stock", "child_physical_stock",
+    ),
+    "silver.silver_base_article": (
+        "item_id", "item_name", "item_description", "categorie", "item_group_id",
+        "item_group_label", "programme", "std_cost_price", "std_unit",
+        "silver_refreshed_at", "product_recid", "product_modified_at", "product_created_at",
+    ),
+}
+
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -147,6 +178,49 @@ def list_sql_files(directory: Path = SQL_DIR) -> list[Path]:
     return files
 
 
+def verifier_colonnes_source(spark, params: dict[str, str]) -> None:
+    """Vérifie que chaque table source expose les colonnes attendues.
+
+    Échoue AVANT toute exécution, en listant d'un seul coup toutes les
+    divergences et les colonnes réellement disponibles. Sans ce contrôle, un
+    nom de colonne différent ne se découvre qu'à l'exécution, une erreur à la
+    fois, chacune coûtant un cycle complet de déploiement et de relance.
+    """
+    prefixes = {
+        "bronze": f"{params['bronze_catalog']}.{params['bronze_schema']}",
+        "silver": f"{params['silver_catalog']}.{params['silver_schema']}",
+    }
+
+    anomalies: list[str] = []
+    for reference, attendues in COLONNES_SOURCE.items():
+        origine, table = reference.split(".", 1)
+        fqn = f"{prefixes[origine]}.{table}"
+        try:
+            disponibles = {nom.lower() for nom in spark.table(fqn).columns}
+        except Exception as exc:  # table absente, droits manquants, catalogue inconnu…
+            anomalies.append(f"  • {fqn} : table illisible — {str(exc).splitlines()[0]}")
+            continue
+
+        manquantes = [nom for nom in attendues if nom.lower() not in disponibles]
+        if manquantes:
+            anomalies.append(
+                f"  • {fqn}\n"
+                f"      colonnes manquantes : {', '.join(manquantes)}\n"
+                f"      colonnes disponibles : {', '.join(sorted(disponibles))}"
+            )
+
+    if anomalies:
+        raise RuntimeError(
+            "Le schéma des sources ne correspond pas à ce que le modèle attend :\n"
+            + "\n".join(anomalies)
+            + "\n\nCorrigez les vues d'abstraction dans src/sql/gold/01_src_views.sql "
+              "et la liste COLONNES_SOURCE de src/jobs/build_gold.py — ce sont les "
+              "deux seuls endroits qui connaissent le nommage de l'amont."
+        )
+
+    LOGGER.info("Contrôle du schéma source : %d table(s) conformes.", len(COLONNES_SOURCE))
+
+
 def run(spark, args: argparse.Namespace) -> dict[str, int]:
     """Exécute la construction complète et retourne le nombre de lignes par table."""
     params = build_sql_params(args)
@@ -154,6 +228,8 @@ def run(spark, args: argparse.Namespace) -> dict[str, int]:
         "Construction de %s.%s depuis %s (seuil de conformité : %s)",
         params["catalog"], params["schema"], params["date_from"], params["seuil_conformite"],
     )
+
+    verifier_colonnes_source(spark, params)
 
     for sql_file in list_sql_files():
         statements = split_statements(render_template(sql_file.read_text(encoding="utf-8"), params))

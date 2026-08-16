@@ -57,40 +57,47 @@ FROM {bronze_catalog}.{bronze_schema}.prod_table AS pt
 WHERE ({company_predicate});
 
 -- --- Référentiel article -----------------------------------------------------
+-- La table silver ne porte PAS de colonne de snapshot par ligne : elle expose
+-- `silver_refreshed_at`, horodatage du dernier rafraîchissement de la table
+-- entière. Le dédoublonnage s'appuie donc sur la chronologie de l'article
+-- lui-même (date de modification, puis de création, puis identifiant technique)
+-- — trois critères qui garantissent un choix déterministe même si les deux
+-- premiers sont nuls ou à égalité.
 CREATE OR REPLACE VIEW {catalog}.{schema}.v_src_article
-COMMENT 'Référentiel article silver, dédoublonné sur le dernier snapshot.'
+COMMENT 'Référentiel article silver, dédoublonné sur la version la plus récente de chaque article.'
 AS
 WITH ranked AS (
     SELECT
         a.*,
         ROW_NUMBER() OVER (
             PARTITION BY a.item_id
-            ORDER BY a.snapshot_date DESC NULLS LAST
+            ORDER BY COALESCE(a.product_modified_at, a.product_created_at) DESC NULLS LAST,
+                     a.product_recid DESC NULLS LAST
         ) AS rn
     FROM {silver_catalog}.{silver_schema}.silver_base_article AS a
 )
 SELECT
-    CAST(item_id          AS STRING)  AS item_id,
-    CAST(item_name        AS STRING)  AS item_name,
-    CAST(item_description AS STRING)  AS item_description,
-    CAST(categorie        AS STRING)  AS categorie,
-    CAST(item_group_id    AS STRING)  AS item_group_id,
-    CAST(item_group_label AS STRING)  AS item_group_label,
-    CAST(programme        AS STRING)  AS programme,
-    CAST(std_cost_price   AS DECIMAL(18, 6)) AS std_cost_price,
-    CAST(std_unit         AS STRING)  AS std_unit,
-    CAST(snapshot_date    AS TIMESTAMP) AS snapshot_date
+    CAST(item_id             AS STRING)  AS item_id,
+    CAST(item_name           AS STRING)  AS item_name,
+    CAST(item_description    AS STRING)  AS item_description,
+    CAST(categorie           AS STRING)  AS categorie,
+    CAST(item_group_id       AS STRING)  AS item_group_id,
+    CAST(item_group_label    AS STRING)  AS item_group_label,
+    CAST(programme           AS STRING)  AS programme,
+    CAST(std_cost_price      AS DECIMAL(18, 6)) AS std_cost_price,
+    CAST(std_unit            AS STRING)  AS std_unit,
+    CAST(silver_refreshed_at AS TIMESTAMP) AS snapshot_date
 FROM ranked
 WHERE rn = 1;
 
 -- --- Nomenclature ------------------------------------------------------------
+-- Aucune dépendance à une colonne d'horodatage : la table silver expose l'état
+-- courant des nomenclatures, pas un historique de snapshots. La sélection d'une
+-- version unique par parent est faite en aval (11_dim_nomenclature), sur des
+-- critères stables — nom de version puis identifiant de BOM.
 CREATE OR REPLACE VIEW {catalog}.{schema}.v_src_bom
-COMMENT 'Nomenclatures actives silver, dernier snapshot uniquement.'
+COMMENT 'Lignes de nomenclature actives, normalisées et filtrées.'
 AS
-WITH last_snapshot AS (
-    SELECT MAX(snapshot_date) AS snapshot_date
-    FROM {silver_catalog}.{silver_schema}.silver_bom
-)
 SELECT
     CAST(b.bomid                 AS STRING) AS bomid,
     CAST(b.parent_itemid         AS STRING) AS parent_itemid,
@@ -101,10 +108,8 @@ SELECT
     CAST(b.child_unitid          AS STRING) AS child_unitid,
     CAST(b.parent_physical_stock AS DECIMAL(18, 6)) AS parent_physical_stock,
     CAST(b.child_physical_stock  AS DECIMAL(18, 6)) AS child_physical_stock,
-    CAST(b.snapshot_date         AS TIMESTAMP) AS snapshot_date
+    CURRENT_TIMESTAMP()                     AS snapshot_date
 FROM {silver_catalog}.{silver_schema}.silver_bom AS b
-JOIN last_snapshot AS s
-  ON b.snapshot_date = s.snapshot_date
 WHERE b.statut = 'Actif'
   AND b.child_itemid IS NOT NULL
   AND b.parent_itemid IS NOT NULL
