@@ -96,6 +96,9 @@ GRILLE_DETAIL = Grille(
         _SEMAINE_DEBUT,
         Colonne(cle="parent_programme", libelle="Programme", type="texte", largeur=110,
                 aide="Programme produit du parent (M3, M2BEV, …)."),
+        Colonne(cle="parent_perimetre", libelle="Périmètre", type="texte", largeur=160,
+                aide="Ligne de production du parent. Maille d'homogénéité du "
+                     "coefficient de nomenclature."),
         Colonne(cle="parent_itemid", libelle="Réf. parent", type="texte", largeur=140),
         Colonne(cle="parent_name", libelle="Désignation parent", type="texte", largeur=200,
                 visible=False),
@@ -141,13 +144,14 @@ GRILLE_COMPOSANTS = Grille(
         "Un composant peut être sain sur un programme et dériver sur un autre : "
         "l'agrégation conserve donc l'axe programme."
     ),
-    cle_ligne=["child_itemid", "parent_programme"],
+    cle_ligne=["child_itemid", "parent_perimetre"],
     tri_defaut="ecart_valorise_absolu",
     colonnes=[
         Colonne(cle="child_itemid", libelle="Réf. composant", type="texte", largeur=150),
         Colonne(cle="child_name", libelle="Désignation", type="texte", largeur=240),
         Colonne(cle="child_categorie", libelle="Catégorie", type="texte", largeur=110),
         Colonne(cle="parent_programme", libelle="Programme", type="texte", largeur=110),
+        Colonne(cle="parent_perimetre", libelle="Périmètre", type="texte", largeur=160),
         Colonne(cle="coef_bom", libelle="Coef BOM", type="decimal", alignement="droite",
                 decimales=4, largeur=100),
         Colonne(cle="is_coef_uniforme", libelle="Coef uniforme", type="booleen",
@@ -218,6 +222,56 @@ GRILLE_PROGRAMMES = Grille(
     ],
 )
 
+GRILLE_PERIMETRES = Grille(
+    cle="perimetres",
+    libelle="Périmètres",
+    description=(
+        "Agrégat par périmètre (ligne de production) et semaine. Maille "
+        "intermédiaire entre le programme et la référence : c'est le niveau où "
+        "le coefficient de nomenclature est homogène, donc où l'écart en "
+        "équivalent produit a un sens."
+    ),
+    cle_ligne=["semaine_debut", "parent_perimetre"],
+    tri_defaut="ecart_valorise_absolu",
+    colonnes=[
+        _SEMAINE,
+        _SEMAINE_DEBUT,
+        Colonne(cle="parent_perimetre", libelle="Périmètre", type="texte", largeur=180),
+        Colonne(cle="parent_programme", libelle="Programme", type="texte", largeur=120),
+        Colonne(cle="nb_parents", libelle="Parents", type="entier", alignement="droite",
+                largeur=90),
+        Colonne(cle="nb_composants", libelle="Composants", type="entier", alignement="droite",
+                largeur=110),
+        Colonne(cle="nb_lignes", libelle="Lignes", type="entier", alignement="droite",
+                largeur=90),
+        Colonne(cle="nb_lignes_ecart", libelle="Lignes en écart", type="entier",
+                alignement="droite", largeur=120),
+        Colonne(cle="taux_conformite", libelle="Conformité", type="pourcent",
+                alignement="droite", decimales=1, largeur=110),
+        Colonne(cle="qty_produite", libelle="Production", type="decimal", alignement="droite",
+                decimales=0, largeur=110,
+                aide="Quantité de parents produits sur le périmètre et la semaine."),
+        Colonne(cle="conso_theorique", libelle="Théorique", type="decimal", alignement="droite",
+                decimales=0, largeur=120),
+        Colonne(cle="conso_reelle", libelle="Réel", type="decimal", alignement="droite",
+                decimales=0, largeur=120),
+        Colonne(cle="ecart_net", libelle="Écart net", type="decimal", alignement="droite",
+                decimales=1, largeur=110),
+        Colonne(cle="ecart_equivalent_produit", libelle="Équiv. produit", type="decimal",
+                alignement="droite", decimales=1, largeur=130,
+                aide="Écart converti en unités de produit fini, sur les composants "
+                     "à coefficient uniforme dans le périmètre."),
+        Colonne(cle="non_consommation_valorisee", libelle="Non-conso €", type="euro",
+                alignement="droite", decimales=0, largeur=130),
+        Colonne(cle="surconsommation_valorisee", libelle="Surconso €", type="euro",
+                alignement="droite", decimales=0, largeur=130),
+        Colonne(cle="ecart_valorise", libelle="Impact net €", type="euro", alignement="droite",
+                decimales=0, largeur=130),
+        Colonne(cle="ecart_valorise_absolu", libelle="Impact absolu €", type="euro",
+                alignement="droite", decimales=0, largeur=140),
+    ],
+)
+
 GRILLE_PARENTS = Grille(
     cle="parents",
     libelle="Articles parents",
@@ -228,6 +282,7 @@ GRILLE_PARENTS = Grille(
         Colonne(cle="parent_itemid", libelle="Réf. parent", type="texte", largeur=150),
         Colonne(cle="parent_name", libelle="Désignation", type="texte", largeur=240),
         Colonne(cle="parent_programme", libelle="Programme", type="texte", largeur=120),
+        Colonne(cle="parent_perimetre", libelle="Périmètre", type="texte", largeur=170),
         Colonne(cle="nb_composants", libelle="Composants", type="entier", alignement="droite",
                 largeur=110),
         Colonne(cle="nb_semaines", libelle="Semaines", type="entier", alignement="droite",
@@ -252,7 +307,10 @@ GRILLE_PARENTS = Grille(
 
 GRILLES: dict[str, Grille] = {
     grille.cle: grille
-    for grille in (GRILLE_DETAIL, GRILLE_COMPOSANTS, GRILLE_PROGRAMMES, GRILLE_PARENTS)
+    for grille in (
+        GRILLE_DETAIL, GRILLE_COMPOSANTS, GRILLE_PROGRAMMES,
+        GRILLE_PERIMETRES, GRILLE_PARENTS,
+    )
 }
 
 

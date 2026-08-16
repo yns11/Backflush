@@ -85,7 +85,7 @@ variables:
 
   llm_endpoint:
     description: Endpoint de serving utilisé par l'assistant IA.
-    default: databricks-claude-sonnet-4-5
+    default: databricks-claude-opus-4-8
   app_service_principal:
     description: >-
       Rôle Postgres du principal de service de l'application, qui reçoit SELECT
@@ -119,9 +119,6 @@ targets:
     workspace:
       root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
     variables:
-      # En développement, le modèle est reconstruit sur un historique court :
-      # le job tourne en quelques minutes au lieu de plusieurs dizaines.
-      date_from: "2026-06-01"
       # client_id du principal de service de « backflush-analytics-dev ».
       # Ce n'est pas un secret — un identifiant, jamais une clé — mais il est
       # propre à cette cible : preprod et prod portent d'autres applications,

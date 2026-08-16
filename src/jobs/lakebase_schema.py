@@ -85,6 +85,8 @@ DIM_ARTICLE = Table(
         Column("item_group_id", "text"),
         Column("item_group_label", "text"),
         Column("programme", "text"),
+        Column("perimetre", "text", comment="Ligne de production du parent"),
+        Column("type_produit", "text"),
         Column("std_cost_price", MONEY),
         Column("std_unit", "text"),
         Column("snapshot_date", TS),
@@ -92,6 +94,7 @@ DIM_ARTICLE = Table(
     ),
     indexes=(
         Index("programme", "(programme)"),
+        Index("perimetre", "(perimetre)"),
         Index("categorie", "(categorie)"),
         Index("groupe", "(item_group_id)"),
     ),
@@ -118,13 +121,14 @@ DIM_NOMENCLATURE = Table(
     indexes=(Index("child", "(child_itemid)"),),
 )
 
-DIM_COEF_PROGRAMME = Table(
-    name="dim_coef_programme",
-    source="dim_coef_programme",
-    comment="Coefficient BOM consolidé par (programme, composant) et uniformité.",
+DIM_COEF_PERIMETRE = Table(
+    name="dim_coef_perimetre",
+    source="dim_coef_perimetre",
+    comment="Coefficient BOM consolidé par (périmètre, composant) et uniformité.",
     columns=(
-        Column("programme", "text", primary_key=True),
+        Column("perimetre", "text", primary_key=True),
         Column("child_itemid", "text", primary_key=True),
+        Column("programme", "text"),
         Column("nb_parents", "integer"),
         Column("child_qty_min", QTY),
         Column("child_qty_max", QTY),
@@ -150,6 +154,7 @@ FACT_PRODUCTION_PARENT = Table(
         Column("annee", "integer"),
         Column("semaine", "integer"),
         Column("parent_programme", "text"),
+        Column("parent_perimetre", "text"),
         Column("parent_name", "text"),
         Column("parent_categorie", "text"),
         Column("qty_produite", QTY),
@@ -210,6 +215,7 @@ FACT_ECART_BACKFLUSH = Table(
         Column("annee", "integer"),
         Column("semaine", "integer"),
         Column("parent_programme", "text"),
+        Column("parent_perimetre", "text"),
         Column("parent_name", "text"),
         Column("parent_categorie", "text"),
         Column("child_name", "text"),
@@ -235,6 +241,9 @@ FACT_ECART_BACKFLUSH = Table(
     indexes=(
         Index("semaine", "(semaine_debut)"),
         Index("prog_semaine", "(parent_programme, semaine_debut)"),
+        # Le périmètre est l'axe de la vue synthétique, filtrée sur une seule
+        # ligne de production : sans cet index, chaque affichage balaie la table.
+        Index("perim_semaine", "(parent_perimetre, semaine_debut)"),
         Index("child_semaine", "(child_itemid, semaine_debut)"),
         Index("parent_semaine", "(parent_itemid, semaine_debut)"),
         Index("cat_semaine", "(child_categorie, semaine_debut)"),
@@ -254,10 +263,11 @@ FACT_ECART_BACKFLUSH = Table(
 AGG_ECART_HEBDO_PROGRAMME = Table(
     name="agg_ecart_hebdo_programme",
     source="agg_ecart_hebdo_programme",
-    comment="Agrégat hebdomadaire par programme (tendances, KPI, réconciliation).",
+    comment="Agrégat hebdomadaire par programme et périmètre (tendances, KPI, réconciliation).",
     columns=(
         Column("semaine_debut", "date", primary_key=True),
         Column("programme", "text", primary_key=True),
+        Column("perimetre", "text", primary_key=True),
         Column("annee", "integer"),
         Column("semaine", "integer"),
         Column("nb_parents", "integer"),
@@ -283,10 +293,11 @@ AGG_ECART_HEBDO_PROGRAMME = Table(
 AGG_ECART_COMPOSANT = Table(
     name="agg_ecart_composant",
     source="agg_ecart_composant",
-    comment="Agrégat cumulé par composant et programme parent (classements, alertes).",
+    comment="Agrégat cumulé par composant, programme et périmètre parent (classements, alertes).",
     columns=(
         Column("child_itemid", "text", primary_key=True),
         Column("parent_programme", "text", primary_key=True),
+        Column("parent_perimetre", "text", primary_key=True),
         Column("child_name", "text"),
         Column("child_categorie", "text"),
         Column("coef_bom", QTY),
@@ -333,7 +344,7 @@ DQ_CONTROLES = Table(
 TABLES: tuple[Table, ...] = (
     DIM_ARTICLE,
     DIM_NOMENCLATURE,
-    DIM_COEF_PROGRAMME,
+    DIM_COEF_PERIMETRE,
     FACT_PRODUCTION_PARENT,
     FACT_CONSOMMATION_COMPOSANT,
     FACT_ECART_BACKFLUSH,

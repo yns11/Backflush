@@ -2,13 +2,13 @@
 -- 41 — agg_ecart_composant : classement et alertes par composant
 -- =============================================================================
 -- Usage : top-N, classements, alertes, page « Références » de l'application.
--- Grain : composant × programme du parent (un composant COMMUN peut être
--- consommé par plusieurs programmes avec des comportements très différents ;
--- l'agréger tous programmes confondus masquerait le programme fautif).
+-- Grain : composant × périmètre du parent (un composant COMMUN peut être
+-- consommé par plusieurs lignes de production avec des comportements très
+-- différents ; l'agréger toutes lignes confondues masquerait la ligne fautive).
 -- =============================================================================
 
 CREATE OR REPLACE TABLE {catalog}.{schema}.agg_ecart_composant
-COMMENT 'Agrégat cumulé des écarts backflush par composant et programme parent. Base des classements et des alertes.'
+COMMENT 'Agrégat cumulé des écarts backflush par composant, programme et périmètre parent. Base des classements et des alertes.'
 TBLPROPERTIES (delta.enableChangeDataFeed = true)
 AS
 SELECT
@@ -16,9 +16,10 @@ SELECT
     MAX(f.child_name)                                    AS child_name,
     MAX(f.child_categorie)                               AS child_categorie,
     f.parent_programme,
+    f.parent_perimetre,
 
-    -- Coefficient représentatif du programme : identique pour tous les parents
-    -- si is_coef_uniforme, sinon le minimum observé (aligné sur dim_coef_programme).
+    -- Coefficient représentatif du périmètre : identique pour tous les parents
+    -- si is_coef_uniforme, sinon le minimum observé (aligné sur dim_coef_perimetre).
     MIN(f.coef_bom)                                      AS coef_bom,
     MAX(f.coef_bom)                                      AS coef_bom_max,
     BOOL_AND(f.is_coef_uniforme)                         AS is_coef_uniforme,
@@ -53,4 +54,4 @@ SELECT
 
     CURRENT_TIMESTAMP()                                  AS loaded_at
 FROM {catalog}.{schema}.fact_ecart_backflush AS f
-GROUP BY f.child_itemid, f.parent_programme;
+GROUP BY f.child_itemid, f.parent_programme, f.parent_perimetre;

@@ -40,6 +40,7 @@ MESURES = """\
     COUNT(DISTINCT f.parent_itemid)                             AS nb_parents,
     COUNT(DISTINCT f.child_itemid)                              AS nb_composants,
     COUNT(DISTINCT f.parent_programme)                          AS nb_programmes,
+    COUNT(DISTINCT f.parent_perimetre)                          AS nb_perimetres,
     COUNT(DISTINCT f.semaine_debut)                             AS nb_semaines,
     COALESCE(SUM(f.conso_theorique), 0)                         AS conso_theorique,
     COALESCE(SUM(f.conso_reelle), 0)                            AS conso_reelle,
@@ -61,6 +62,7 @@ SEMAINE_LIBELLE = "f.annee::text || '-S' || lpad(f.semaine::text, 2, '0')"
 #: Dimensions autorisées pour une répartition. Liste blanche stricte.
 DIMENSIONS = {
     "programme": "f.parent_programme",
+    "perimetre": "f.parent_perimetre",
     "categorie": "f.child_categorie",
     "statut": "f.statut_ligne",
     "type": None,          # remplacé par l'expression dynamique du type d'écart
@@ -70,6 +72,7 @@ DIMENSIONS = {
 _TRI_COMMUN = {
     "semaine_debut": "f.semaine_debut",
     "parent_programme": "f.parent_programme",
+    "parent_perimetre": "f.parent_perimetre",
     "ecart_valorise": "ecart_valorise",
     "ecart_valorise_absolu": "ecart_valorise_absolu",
     "ecart_net": "ecart_net",
@@ -79,6 +82,7 @@ TRI_SQL: dict[str, dict[str, str]] = {
     "details": {
         "semaine_debut": "f.semaine_debut",
         "parent_programme": "f.parent_programme",
+        "parent_perimetre": "f.parent_perimetre",
         "parent_itemid": "f.parent_itemid",
         "parent_name": "f.parent_name",
         "child_itemid": "f.child_itemid",
@@ -124,6 +128,20 @@ TRI_SQL: dict[str, dict[str, str]] = {
         "taux_conformite": "taux_conformite",
         "conso_theorique": "conso_theorique",
         "conso_reelle": "conso_reelle",
+        "non_consommation_valorisee": "non_consommation_valorisee",
+        "surconsommation_valorisee": "surconsommation_valorisee",
+    },
+    "perimetres": {
+        **_TRI_COMMUN,
+        "nb_parents": "nb_parents",
+        "nb_composants": "nb_composants",
+        "nb_lignes": "nb_lignes",
+        "nb_lignes_ecart": "nb_lignes_ecart",
+        "taux_conformite": "taux_conformite",
+        "qty_produite": "qty_produite",
+        "conso_theorique": "conso_theorique",
+        "conso_reelle": "conso_reelle",
+        "ecart_equivalent_produit": "ecart_equivalent_produit",
         "non_consommation_valorisee": "non_consommation_valorisee",
         "surconsommation_valorisee": "surconsommation_valorisee",
     },
@@ -181,6 +199,10 @@ class Repository:
             "SELECT DISTINCT parent_programme AS valeur FROM fact_ecart_backflush "
             "WHERE parent_programme IS NOT NULL ORDER BY 1", {},
         )
+        perimetres = self._fetch(
+            "SELECT DISTINCT parent_perimetre AS valeur FROM fact_ecart_backflush "
+            "WHERE parent_perimetre IS NOT NULL ORDER BY 1", {},
+        )
         categories = self._fetch(
             "SELECT DISTINCT child_categorie AS valeur FROM fact_ecart_backflush "
             "WHERE child_categorie IS NOT NULL ORDER BY 1", {},
@@ -191,6 +213,7 @@ class Repository:
         ) or {}
         return {
             "programmes": [ligne["valeur"] for ligne in programmes],
+            "perimetres": [ligne["valeur"] for ligne in perimetres],
             "categories": [ligne["valeur"] for ligne in categories],
             "types_ecart": ["Non-consommation", "Surconsommation", "Conforme"],
             "statuts_ligne": ["Nominal", "Hors nomenclature", "Sans consommation"],
@@ -470,6 +493,7 @@ _SQL_GRILLES: dict[str, str] = {
                f.semaine,
                {semaine_libelle}                AS semaine_libelle,
                f.parent_programme,
+               f.parent_perimetre,
                f.parent_itemid,
                f.parent_name,
                f.child_itemid,
@@ -499,6 +523,7 @@ _SQL_GRILLES: dict[str, str] = {
                MAX(f.child_name)                AS child_name,
                MAX(f.child_categorie)           AS child_categorie,
                f.parent_programme,
+               f.parent_perimetre,
                MIN(f.coef_bom)                  AS coef_bom,
                bool_and(f.is_coef_uniforme)     AS is_coef_uniforme,
                {mesures},
@@ -508,7 +533,7 @@ _SQL_GRILLES: dict[str, str] = {
                COUNT(*) OVER ()                 AS _total
         FROM {fact} f
         WHERE {predicat}
-        GROUP BY f.child_itemid, f.parent_programme
+        GROUP BY f.child_itemid, f.parent_programme, f.parent_perimetre
         ORDER BY {ordre}, f.child_itemid
         LIMIT %(limite)s OFFSET %(decalage)s
     """,
@@ -527,6 +552,45 @@ _SQL_GRILLES: dict[str, str] = {
         WHERE {predicat}
         GROUP BY f.semaine_debut, f.annee, f.semaine, f.parent_programme
         ORDER BY {ordre}, f.semaine_debut DESC, f.parent_programme
+        LIMIT %(limite)s OFFSET %(decalage)s
+    """,
+    "perimetres": """
+        WITH production AS (
+            -- Même précaution que pour la grille « parents » : la quantité
+            -- produite est répétée sur chaque ligne de composant. On la
+            -- dédoublonne par (périmètre, parent, semaine) avant de sommer,
+            -- sinon la production serait multipliée par le nombre de composants.
+            SELECT parent_perimetre, semaine_debut, SUM(qty_semaine) AS qty_produite
+            FROM (
+                SELECT f.parent_perimetre,
+                       f.semaine_debut,
+                       f.parent_itemid,
+                       MAX(f.qty_parent_produite) AS qty_semaine
+                FROM {fact} f
+                WHERE {predicat}
+                GROUP BY f.parent_perimetre, f.semaine_debut, f.parent_itemid
+            ) parparent
+            GROUP BY parent_perimetre, semaine_debut
+        )
+        SELECT f.semaine_debut,
+               f.annee,
+               f.semaine,
+               {semaine_libelle}                AS semaine_libelle,
+               f.parent_perimetre,
+               MAX(f.parent_programme)          AS parent_programme,
+               MAX(p.qty_produite)              AS qty_produite,
+               {mesures},
+               CASE WHEN COUNT(*) > 0
+                    THEN (COUNT(*) - COUNT(*) FILTER (WHERE ({type_expr}) <> 'Conforme'))::numeric
+                         / COUNT(*) * 100 END   AS taux_conformite,
+               COUNT(*) OVER ()                 AS _total
+        FROM {fact} f
+        LEFT JOIN production p
+               ON p.parent_perimetre = f.parent_perimetre
+              AND p.semaine_debut    = f.semaine_debut
+        WHERE {predicat}
+        GROUP BY f.semaine_debut, f.annee, f.semaine, f.parent_perimetre
+        ORDER BY {ordre}, f.semaine_debut DESC, f.parent_perimetre
         LIMIT %(limite)s OFFSET %(decalage)s
     """,
     "parents": """
@@ -548,13 +612,14 @@ _SQL_GRILLES: dict[str, str] = {
         SELECT f.parent_itemid,
                MAX(f.parent_name)               AS parent_name,
                f.parent_programme,
+               f.parent_perimetre,
                MAX(p.qty_produite)              AS qty_produite,
                {mesures},
                COUNT(*) OVER ()                 AS _total
         FROM {fact} f
         LEFT JOIN production p ON p.parent_itemid = f.parent_itemid
         WHERE {predicat}
-        GROUP BY f.parent_itemid, f.parent_programme
+        GROUP BY f.parent_itemid, f.parent_programme, f.parent_perimetre
         ORDER BY {ordre}, f.parent_itemid
         LIMIT %(limite)s OFFSET %(decalage)s
     """,

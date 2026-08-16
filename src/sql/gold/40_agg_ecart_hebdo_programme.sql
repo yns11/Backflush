@@ -1,9 +1,14 @@
 -- =============================================================================
--- 40 — agg_ecart_hebdo_programme : KPI et tendances par programme × semaine
+-- 40 — agg_ecart_hebdo_programme : KPI et tendances par périmètre × semaine
 -- =============================================================================
--- Usage : graphiques de tendance, KPI par programme, contrôle de cohérence de
--- l'application (les agrégats recalculés à la volée par l'app doivent retomber
--- sur ces valeurs pour une plage couvrant tout l'historique).
+-- Usage : graphiques de tendance, KPI, contrôle de cohérence de l'application
+-- (les agrégats recalculés à la volée par l'app doivent retomber sur ces
+-- valeurs pour une plage couvrant tout l'historique).
+--
+-- Le grain descend au périmètre — un périmètre relevant d'un seul programme,
+-- les totaux par programme restent obtenus par simple somme, SAUF pour les
+-- dénombrements distincts (nb_parents, nb_composants), qui ne sont jamais
+-- additifs : les recalculer depuis la table de faits.
 --
 -- Convention de signe : `non_consommation` et `surconsommation` sont toutes deux
 -- exprimées en valeur ABSOLUE (des volumes, pas des soldes) ; `ecart_net` est le
@@ -11,7 +16,7 @@
 -- =============================================================================
 
 CREATE OR REPLACE TABLE {catalog}.{schema}.agg_ecart_hebdo_programme
-COMMENT 'Agrégat hebdomadaire des écarts backflush par programme. Grain : programme × semaine ISO.'
+COMMENT 'Agrégat hebdomadaire des écarts backflush. Grain : programme × périmètre × semaine ISO.'
 TBLPROPERTIES (delta.enableChangeDataFeed = true)
 AS
 SELECT
@@ -19,6 +24,7 @@ SELECT
     semaine,
     semaine_debut,
     parent_programme                                          AS programme,
+    parent_perimetre                                          AS perimetre,
 
     COUNT(DISTINCT parent_itemid)                             AS nb_parents,
     COUNT(DISTINCT child_itemid)                              AS nb_composants,
@@ -41,4 +47,4 @@ SELECT
 
     CURRENT_TIMESTAMP()                                       AS loaded_at
 FROM {catalog}.{schema}.fact_ecart_backflush
-GROUP BY annee, semaine, semaine_debut, parent_programme;
+GROUP BY annee, semaine, semaine_debut, parent_programme, parent_perimetre;

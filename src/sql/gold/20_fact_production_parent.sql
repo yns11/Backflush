@@ -48,6 +48,7 @@ SELECT
     g.semaine_debut,
     g.parent_itemid,
     COALESCE(a.programme, 'NON RENSEIGNE')  AS parent_programme,
+    COALESCE(a.perimetre, 'NON RENSEIGNE')  AS parent_perimetre,
     a.item_name                             AS parent_name,
     COALESCE(a.categorie, 'NON RENSEIGNE')  AS parent_categorie,
     g.qty_produite,

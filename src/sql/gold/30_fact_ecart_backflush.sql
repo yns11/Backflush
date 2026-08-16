@@ -98,6 +98,7 @@ SELECT
     -- côté Lakebase.
     c.parent_itemid,
     COALESCE(pa.programme, 'NON RENSEIGNE')          AS parent_programme,
+    COALESCE(pa.perimetre, 'NON RENSEIGNE')          AS parent_perimetre,
     pa.item_name                                     AS parent_name,
     COALESCE(pa.categorie, 'NON RENSEIGNE')          AS parent_categorie,
 
@@ -136,7 +137,8 @@ SELECT
 
     -- Équivalent produit fabriqué : nombre d'unités parent « manquantes » ou
     -- « en trop » vu depuis ce composant. N'a de sens que si le coefficient est
-    -- uniforme sur le programme (sinon la division est ambiguë).
+    -- uniforme sur le PÉRIMÈTRE — la ligne de production — et non sur le
+    -- programme, qui mélange des nomenclatures sans rapport (voir 12_*).
     COALESCE(cp.is_coef_uniforme, FALSE)             AS is_coef_uniforme,
     CASE
         WHEN COALESCE(cp.is_coef_uniforme, FALSE) AND c.coef_bom > 0
@@ -151,6 +153,6 @@ SELECT
 FROM calcule AS c
 LEFT JOIN {catalog}.{schema}.dim_article       AS pa ON pa.item_id = c.parent_itemid
 LEFT JOIN {catalog}.{schema}.dim_article       AS ca ON ca.item_id = c.child_itemid
-LEFT JOIN {catalog}.{schema}.dim_coef_programme AS cp
+LEFT JOIN {catalog}.{schema}.dim_coef_perimetre AS cp
        ON  cp.child_itemid = c.child_itemid
-       AND cp.programme    = pa.programme;
+       AND cp.perimetre    = COALESCE(pa.perimetre, 'NON RENSEIGNE');

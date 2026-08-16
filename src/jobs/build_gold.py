@@ -107,6 +107,10 @@ COLONNES_SOURCE: dict[str, tuple[str, ...]] = {
         "item_group_label", "programme", "std_cost_price", "std_unit",
         "silver_refreshed_at", "product_recid", "product_modified_at", "product_created_at",
     ),
+    # Rattachement parent → ligne de production, l'axe « périmètre » de l'app.
+    "silver.produits_fabriques": (
+        "ref_parent", "item_name", "type", "ligne_de_prod",
+    ),
 }
 
 
@@ -265,7 +269,7 @@ def run(spark, args: argparse.Namespace) -> dict[str, int]:
 PUBLISHED_TABLES = (
     "dim_article",
     "dim_nomenclature",
-    "dim_coef_programme",
+    "dim_coef_perimetre",
     "fact_production_parent",
     "fact_consommation_composant",
     "fact_ecart_backflush",

@@ -68,7 +68,11 @@ def build_dataset(weeks: int, seed: int) -> dict[str, list[tuple[Any, ...]]]:
     for programme in PROGRAMMES[:-1]:                     # COMMUN n'a pas de parent
         for index in range(1, 13):
             item_id = f"{programme}-STA-{index:03d}"
+            # Deux lignes de production par programme : de quoi vérifier que le
+            # périmètre discrimine bien à l'intérieur d'un même programme.
             parent = {
+                "perimetre": f"{programme} - STATOR {'A' if index <= 6 else 'B'}",
+                "type_produit": "STATOR",
                 "item_id": item_id,
                 "item_name": f"Stator {programme} v{index}",
                 "categorie": "STATOR",
@@ -103,7 +107,8 @@ def build_dataset(weeks: int, seed: int) -> dict[str, list[tuple[Any, ...]]]:
             a["categorie"],
             a["item_group_id"],
             {"COMPO": "Composant", "PSMFI": "Produit semi-fini", "PFINI": "Produit fini"}[a["item_group_id"]],
-            a["programme"], a["std_cost_price"], a["std_unit"], now, now,
+            a["programme"], a.get("perimetre"), a.get("type_produit"),
+            a["std_cost_price"], a["std_unit"], now, now,
         )
         for a in articles
     ]
@@ -133,14 +138,17 @@ def build_dataset(weeks: int, seed: int) -> dict[str, list[tuple[Any, ...]]]:
     ]
 
     programme_par_parent = {p["item_id"]: p["programme"] for p in parents}
+    perimetre_par_parent = {p["item_id"]: p["perimetre"] for p in parents}
+    programme_par_perimetre = {p["perimetre"]: p["programme"] for p in parents}
     coefs: dict[tuple[str, str], list[Decimal]] = {}
     for (parent_id, child_id), qty in nomenclature.items():
-        coefs.setdefault((programme_par_parent[parent_id], child_id), []).append(qty)
+        coefs.setdefault((perimetre_par_parent[parent_id], child_id), []).append(qty)
 
-    dim_coef_programme = [
-        (programme, child_id, len(quantites), min(quantites), max(quantites), min(quantites),
+    dim_coef_perimetre = [
+        (perimetre, child_id, programme_par_perimetre[perimetre],
+         len(quantites), min(quantites), max(quantites), min(quantites),
          max(quantites) - min(quantites) <= Decimal("0.000001"), now, now)
-        for (programme, child_id), quantites in coefs.items()
+        for (perimetre, child_id), quantites in coefs.items()
     ]
 
     # --- Production et consommation -----------------------------------------
@@ -159,7 +167,8 @@ def build_dataset(weeks: int, seed: int) -> dict[str, list[tuple[Any, ...]]]:
     fact_production = [
         (
             semaine, parent_id, *iso_week_fields(semaine),
-            programme_par_parent[parent_id], nom_par_parent[parent_id],
+            programme_par_parent[parent_id], perimetre_par_parent[parent_id],
+            nom_par_parent[parent_id],
             "STATOR", qty, rng.randint(3, 40),
             datetime.combine(semaine, datetime.min.time(), tzinfo=UTC),
             datetime.combine(semaine + timedelta(days=4), datetime.min.time(), tzinfo=UTC),
@@ -200,21 +209,23 @@ def build_dataset(weeks: int, seed: int) -> dict[str, list[tuple[Any, ...]]]:
 
     return _assemble(
         articles, nom_par_parent, nomenclature, programme_par_parent,
+        perimetre_par_parent,
         production, consommation, dim_article, dim_nomenclature,
-        dim_coef_programme, fact_production, coefs, now, rng,
+        dim_coef_perimetre, fact_production, coefs, now, rng,
     )
 
 
 def _assemble(
     articles, nom_par_parent, nomenclature, programme_par_parent,
+    perimetre_par_parent,
     production, consommation, dim_article, dim_nomenclature,
-    dim_coef_programme, fact_production, coefs, now, rng,
+    dim_coef_perimetre, fact_production, coefs, now, rng,
 ) -> dict[str, list[tuple[Any, ...]]]:
     """Calcule les faits d'écart et les agrégats, en miroir du SQL gold."""
     par_id = {a["item_id"]: a for a in articles}
     uniformite = {
-        (programme, child): max(q) - min(q) <= Decimal("0.000001")
-        for (programme, child), q in coefs.items()
+        (perimetre, child): max(q) - min(q) <= Decimal("0.000001")
+        for (perimetre, child), q in coefs.items()
     }
     seuil = Decimal("0.5")
 
@@ -252,12 +263,13 @@ def _assemble(
             else "Sans consommation" if (semaine, parent_id, child_id) not in consommation
             else "Nominal"
         )
-        uniforme = bool(uniformite.get((programme, child_id), False))
+        perimetre = perimetre_par_parent[parent_id]
+        uniforme = bool(uniformite.get((perimetre, child_id), False))
         annee, num = iso_week_fields(semaine)
 
         fact_ecart.append((
             semaine, parent_id, child_id, annee, num,
-            programme, nom_par_parent[parent_id], "STATOR",
+            programme, perimetre, nom_par_parent[parent_id], "STATOR",
             article_enfant["item_name"], article_enfant["categorie"],
             article_enfant["programme"], article_enfant["std_unit"],
             coef, volume, reelle, theorique, ecart,
@@ -278,7 +290,7 @@ def _assemble(
     return {
         "dim_article": dim_article,
         "dim_nomenclature": dim_nomenclature,
-        "dim_coef_programme": dim_coef_programme,
+        "dim_coef_perimetre": dim_coef_perimetre,
         "fact_production_parent": fact_production,
         "fact_consommation_composant": fact_consommation,
         "fact_ecart_backflush": fact_ecart,
@@ -295,7 +307,8 @@ _I = {name: position for position, name in enumerate(TABLES_BY_NAME["fact_ecart_
 def _aggregate_hebdo(fact: list[tuple[Any, ...]], now: datetime) -> list[tuple[Any, ...]]:
     buckets: dict[tuple[date, str], dict[str, Any]] = {}
     for row in fact:
-        key = (row[_I["semaine_debut"]], row[_I["parent_programme"]])
+        key = (row[_I["semaine_debut"]], row[_I["parent_programme"]],
+               row[_I["parent_perimetre"]])
         bucket = buckets.setdefault(key, {
             "parents": set(), "composants": set(), "lignes": 0, "avec_ecart": 0,
             "hors_nom": 0, "sans_conso": 0, "theo": Decimal(0), "reel": Decimal(0),
@@ -320,18 +333,19 @@ def _aggregate_hebdo(fact: list[tuple[Any, ...]], now: datetime) -> list[tuple[A
         bucket["val_abs"] += abs(valorise)
 
     return [
-        (semaine, programme, *iso_week_fields(semaine),
+        (semaine, programme, perimetre, *iso_week_fields(semaine),
          len(b["parents"]), len(b["composants"]), b["lignes"], b["avec_ecart"],
          b["hors_nom"], b["sans_conso"], b["theo"], b["reel"], b["net"], b["nc"], b["sc"],
          b["val"], b["val_nc"], b["val_sc"], b["val_abs"], now)
-        for (semaine, programme), b in sorted(buckets.items())
+        for (semaine, programme, perimetre), b in sorted(buckets.items())
     ]
 
 
 def _aggregate_composant(fact: list[tuple[Any, ...]], now: datetime) -> list[tuple[Any, ...]]:
     buckets: dict[tuple[str, str], dict[str, Any]] = {}
     for row in fact:
-        key = (row[_I["child_itemid"]], row[_I["parent_programme"]])
+        key = (row[_I["child_itemid"]], row[_I["parent_programme"]],
+               row[_I["parent_perimetre"]])
         bucket = buckets.setdefault(key, {
             "name": row[_I["child_name"]], "cat": row[_I["child_categorie"]],
             "coefs": [], "uniforme": True, "parents": set(), "semaines": set(),
@@ -356,7 +370,7 @@ def _aggregate_composant(fact: list[tuple[Any, ...]], now: datetime) -> list[tup
         bucket["val_abs"] += abs(valorise)
 
     return [
-        (child_id, programme, b["name"], b["cat"],
+        (child_id, programme, perimetre, b["name"], b["cat"],
          min(b["coefs"]) if b["coefs"] else None, max(b["coefs"]) if b["coefs"] else None,
          b["uniforme"], len(b["parents"]), len(b["semaines"]), b["en_ecart"],
          min(b["semaines"]), max(b["semaines"]), b["theo"], b["reel"], b["net"],
@@ -364,7 +378,7 @@ def _aggregate_composant(fact: list[tuple[Any, ...]], now: datetime) -> list[tup
          (b["net"] / b["theo"] * 100) if b["theo"] > 0 else None,
          "Non-consommation" if b["nc"] >= b["sc"] else "Surconsommation",
          b["eq"], b["cout"], b["val"], b["val_abs"], now)
-        for (child_id, programme), b in sorted(buckets.items())
+        for (child_id, programme, perimetre), b in sorted(buckets.items())
     ]
 
 
@@ -375,7 +389,7 @@ def _quality_rows(fact: list[tuple[Any, ...]], now: datetime) -> list[tuple[Any,
         if row[_I["child_cout_standard"]] is None and row[_I["type_ecart"]] != "Conforme"
     })
     non_uniforme = len({
-        (row[_I["parent_programme"]], row[_I["child_itemid"]])
+        (row[_I["parent_perimetre"]], row[_I["child_itemid"]])
         for row in fact if not row[_I["is_coef_uniforme"]]
     })
     controles = [
@@ -384,7 +398,7 @@ def _quality_rows(fact: list[tuple[Any, ...]], now: datetime) -> list[tuple[Any,
         ("composant_sans_cout_standard", "ALERTE", "Référentiel", sans_cout,
          "Composants en écart sans coût standard : leur impact financier est compté pour 0 €."),
         ("coef_non_uniforme", "INFO", "Nomenclature", non_uniforme,
-         "Couples (programme, composant) à coefficient non uniforme."),
+         "Couples (périmètre, composant) à coefficient non uniforme."),
         ("article_hors_referentiel", "ERREUR", "Référentiel", 0,
          "Composants mouvementés absents de dim_article."),
         ("reconciliation_agg_detail", "ERREUR", "Cohérence", 0,

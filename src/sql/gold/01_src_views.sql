@@ -131,3 +131,33 @@ WHERE b.statut = 'Actif'
   AND b.parent_itemid IS NOT NULL
   AND b.child_qty IS NOT NULL
   AND b.child_qty > 0;      -- un coef nul ou négatif rendrait l'équivalent produit indéfini
+
+-- --- Produits fabriqués : rattachement d'un parent à sa ligne de production ---
+-- La « ligne de prod », nommée PÉRIMÈTRE dans l'application, est l'axe
+-- d'analyse opérationnel : c'est elle qui porte un coefficient de nomenclature
+-- homogène, donc la conversion d'un écart en équivalent produit fabriqué.
+--
+-- Contrat métier : une référence parent appartient à un seul périmètre, et un
+-- périmètre relève d'un seul programme. Le ROW_NUMBER n'est donc pas une
+-- correction de modèle mais un garde-fou : un doublon dans la table source
+-- multiplierait les lignes de la table de faits, en silence.
+CREATE OR REPLACE VIEW {catalog}.{schema}.v_src_produit_fabrique
+COMMENT 'Rattachement parent → ligne de production (périmètre), dédoublonné.'
+AS
+WITH ranked AS (
+    SELECT
+        CAST(p.ref_parent    AS STRING) AS parent_itemid,
+        CAST(p.item_name     AS STRING) AS parent_name_source,
+        CAST(p.type          AS STRING) AS type_produit,
+        CAST(p.ligne_de_prod AS STRING) AS perimetre,
+        ROW_NUMBER() OVER (
+            PARTITION BY p.ref_parent
+            ORDER BY p.ligne_de_prod NULLS LAST
+        ) AS rn
+    FROM {silver_catalog}.{silver_schema}.produits_fabriques AS p
+    WHERE p.ref_parent IS NOT NULL
+      AND NULLIF(TRIM(p.ligne_de_prod), '') IS NOT NULL
+)
+SELECT parent_itemid, parent_name_source, type_produit, perimetre
+FROM ranked
+WHERE rn = 1;

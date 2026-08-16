@@ -107,7 +107,7 @@ class Settings(BaseSettings):
 
     # --- Assistant IA --------------------------------------------------------
     llm_endpoint: str = Field(
-        default="databricks-claude-sonnet-4-5",
+        default="databricks-claude-opus-4-8",
         description="Nom du endpoint de serving utilisé par l'assistant.",
     )
     llm_max_tokens: int = 2_000

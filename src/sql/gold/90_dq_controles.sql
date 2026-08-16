@@ -140,8 +140,8 @@ WITH controles AS (
     SELECT
         'coef_non_uniforme', 'INFO', 'Nomenclature',
         COUNT(*), 0,
-        'Couples (programme, composant) à coefficient non uniforme : écart en équivalent produit non calculé.'
-    FROM {catalog}.{schema}.dim_coef_programme
+        'Couples (périmètre, composant) à coefficient non uniforme : écart en équivalent produit non calculé.'
+    FROM {catalog}.{schema}.dim_coef_perimetre
     WHERE NOT is_coef_uniforme
 
     UNION ALL

@@ -40,7 +40,7 @@ class TestRoutesSansBase:
 
     def test_dictionnaire_des_grilles(self, client: TestClient) -> None:
         grilles = client.get("/api/meta/grilles").json()
-        assert set(grilles) == {"details", "composants", "programmes", "parents"}
+        assert set(grilles) == {"details", "composants", "programmes", "perimetres", "parents"}
         for grille in grilles.values():
             assert grille["colonnes"], "Une grille sans colonne est inexploitable."
             assert grille["cle_ligne"], "Sans clé de ligne, la sélection est impossible."

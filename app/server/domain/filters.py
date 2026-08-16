@@ -79,6 +79,9 @@ class Filtres(BaseModel):
     date_fin: date | None = None
 
     programmes: list[str] = Field(default_factory=list, max_length=LISTE_MAX)
+    #: Périmètres — les lignes de production. Axe d'analyse plus fin que le
+    #: programme, et seul niveau où le coefficient de nomenclature est homogène.
+    perimetres: list[str] = Field(default_factory=list, max_length=LISTE_MAX)
     categories: list[str] = Field(default_factory=list, max_length=LISTE_MAX)
     types_ecart: list[TypeEcart] = Field(default_factory=list)
     statuts_ligne: list[StatutLigne] = Field(default_factory=list)
@@ -118,7 +121,7 @@ class Filtres(BaseModel):
         nettoye = valeur.strip()
         return nettoye or None
 
-    @field_validator("programmes", "categories", "parents", "composants")
+    @field_validator("programmes", "perimetres", "categories", "parents", "composants")
     @classmethod
     def _nettoyer_liste(cls, valeurs: list[str]) -> list[str]:
         # Dédoublonnage en conservant l'ordre : un doublon allongerait le tableau
@@ -187,6 +190,7 @@ def construire_predicat(filtres: Filtres, alias: str = "f") -> Predicat:
 
     for champ, colonne, cle in (
         (filtres.programmes, "parent_programme", "programmes"),
+        (filtres.perimetres, "parent_perimetre", "perimetres"),
         (filtres.categories, "child_categorie", "categories"),
         (filtres.parents, "parent_itemid", "parents"),
         (filtres.composants, "child_itemid", "composants"),
