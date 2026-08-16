@@ -58,6 +58,47 @@ Exemple complet, pour un projet `backflush` sur sa branche `production` :
 > défaut — le projet n'accepte **que** l'authentification OAuth. C'est le mode
 > que l'application privilégie ; aucune action n'est requise.
 
+### Hôte direct, jamais l'hôte mutualisé
+
+`get-endpoint` retourne deux hôtes :
+
+```
+hosts.host                    ep-….database.<region>.cloud.databricks.com
+hosts.read_write_pooled_host  ep-…-pooler.database.<region>.cloud.databricks.com
+```
+
+**Renseignez `lakebase_host` avec le premier.** L'hôte « pooler » mutualise les
+connexions en mode transaction, ce qui casserait deux mécanismes de cette
+application :
+
+* les **curseurs serveur nommés** de l'export Excel (`DECLARE CURSOR`), qui
+  vivent à l'échelle de la session et non de la transaction ;
+* les réglages de session posés à l'ouverture de chaque connexion
+  (`statement_timeout`, `default_transaction_read_only`, `search_path`), qu'un
+  pooler en mode transaction ne garantit pas de conserver.
+
+L'application gère déjà son propre pool, dimensionné pour rester bien en deçà du
+plafond de connexions de l'endpoint : un second niveau de mutualisation
+n'apporterait rien et retirerait ces garanties.
+
+### Dimensionnement de l'endpoint
+
+Vérifiez les bornes d'autoscaling de l'endpoint, distinctes des valeurs par
+défaut du projet :
+
+```bash
+databricks postgres list-endpoints projects/<PROJET>/branches/<BRANCHE> --profile <PROFIL> \
+  -o json | jq '.[].status | {autoscaling_limit_min_cu, autoscaling_limit_max_cu, suspend_timeout_duration}'
+```
+
+Le profil de charge de cette application est très creux : une ingestion
+quotidienne, puis des requêtes indexées de quelques dizaines de millisecondes.
+Un plancher élevé associé à un délai de suspension long maintient l'instance
+allumée en permanence, pour un bénéfice nul. Un plancher bas et une suspension
+plus courte conviennent mieux ; le réveil consécutif est absorbé par le
+pre-ping du pool, au prix de quelques centaines de millisecondes sur la première
+requête de la journée. À arbitrer avec l'équipe plateforme selon le coût du CU.
+
 ## 2. Compiler le frontend
 
 ```bash
