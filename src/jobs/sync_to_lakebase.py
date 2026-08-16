@@ -44,6 +44,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import psycopg
 from psycopg import sql as pgsql
@@ -104,12 +105,77 @@ LOG_EVERY = 100_000
 # ---------------------------------------------------------------------------
 # Connexion
 # ---------------------------------------------------------------------------
+def version_sdk() -> str:
+    """Version du SDK Databricks installée, ou « inconnue »."""
+    try:
+        from databricks.sdk.version import __version__
+
+        return __version__
+    except Exception:  # un diagnostic ne doit jamais faire échouer
+        return "inconnue"
+
+
+def generer_jeton_lakebase(workspace: Any, endpoint: str) -> str:
+    """Génère un identifiant Lakebase, quelle que soit la génération d'API du SDK.
+
+    Deux générations coexistent, et le SDK embarqué dans un environnement de job
+    n'est pas toujours celui du poste de développement :
+
+    * ``w.postgres`` — génération « projects / branches / endpoints », l'actuelle ;
+    * ``w.database`` — génération « database instances », antérieure.
+
+    On essaie la plus récente, puis l'autre. En cas d'échec des deux, le message
+    nomme la version installée et les pistes tentées : sans cela, l'erreur se
+    résume à un ``AttributeError`` sur un attribut absent, qui ne dit ni
+    pourquoi ni comment y remédier.
+    """
+    tentatives: list[str] = []
+
+    api_postgres = getattr(workspace, "postgres", None)
+    if api_postgres is not None and hasattr(api_postgres, "generate_database_credential"):
+        try:
+            return api_postgres.generate_database_credential(endpoint=endpoint).token
+        except Exception as exc:  # on tente la génération suivante
+            tentatives.append(f"w.postgres.generate_database_credential : {exc}")
+    else:
+        tentatives.append("w.postgres : absent de cette version du SDK")
+
+    api_database = getattr(workspace, "database", None)
+    if api_database is not None and hasattr(api_database, "generate_database_credential"):
+        try:
+            # L'API antérieure raisonne en « instances », pas en endpoints : on
+            # extrait l'identifiant de projet du chemin de ressource.
+            instance = endpoint.split("/")[1] if "/" in endpoint else endpoint
+            return api_database.generate_database_credential(
+                request_id=str(uuid4()), instance_names=[instance]
+            ).token
+        except Exception as exc:  # dernière piste : on rapporte tout
+            tentatives.append(f"w.database.generate_database_credential : {exc}")
+    else:
+        tentatives.append("w.database : absent de cette version du SDK")
+
+    raise RuntimeError(
+        f"Impossible de générer un identifiant Lakebase pour « {endpoint} ».\n"
+        f"Version du SDK Databricks installée : {version_sdk()}\n"
+        "Pistes tentées :\n  • " + "\n  • ".join(tentatives) + "\n\n"
+        "Deux remèdes :\n"
+        "  1. Relever la version de databricks-sdk dans le bloc `environments` de "
+        "resources/backflush_pipeline.job.yml — l'API `postgres` n'existe pas dans "
+        "les versions anciennes.\n"
+        "  2. Contourner la génération : passer le mot de passe par la variable "
+        "d'environnement PGPASSWORD, après l'avoir obtenu par "
+        "`databricks postgres generate-database-credential`."
+    )
+
+
 def connect(args: argparse.Namespace) -> psycopg.Connection:
     """Ouvre une connexion Lakebase.
 
-    Deux modes, dans cet ordre :
+    Trois modes, par priorité décroissante :
 
     * ``LAKEBASE_PG_URL`` — développement local / Postgres de test ;
+    * ``PGPASSWORD`` — identifiant fourni de l'extérieur, échappatoire quand la
+      génération par le SDK est indisponible ;
     * OAuth Databricks — jeton d'une heure généré pour l'endpoint Lakebase.
       Le job dure moins d'une heure par construction ; en cas de volumétrie
       exceptionnelle, relancer par sous-ensemble de tables (``--tables``).
@@ -119,19 +185,31 @@ def connect(args: argparse.Namespace) -> psycopg.Connection:
         LOGGER.info("Connexion Lakebase via LAKEBASE_PG_URL (mode local).")
         return psycopg.connect(url, autocommit=False)
 
-    if not (args.pg_host and args.lakebase_endpoint):
+    if not args.pg_host:
         raise RuntimeError(
-            "Connexion impossible : définissez LAKEBASE_PG_URL, ou passez "
-            "--pg-host et --lakebase-endpoint."
+            "Connexion impossible : définissez LAKEBASE_PG_URL, ou passez --pg-host "
+            "avec --lakebase-endpoint (ou PGPASSWORD)."
         )
 
-    from databricks.sdk import WorkspaceClient
+    mot_de_passe = os.getenv("PGPASSWORD")
+    if mot_de_passe:
+        user = args.pg_user or os.getenv("PGUSER")
+        if not user:
+            raise RuntimeError("PGPASSWORD est défini mais l'utilisateur est inconnu : "
+                               "passez --pg-user ou définissez PGUSER.")
+        LOGGER.info("Connexion Lakebase avec l'identifiant fourni par PGPASSWORD.")
+    else:
+        if not args.lakebase_endpoint:
+            raise RuntimeError(
+                "Connexion impossible : --lakebase-endpoint est requis pour générer "
+                "un identifiant, sauf si PGPASSWORD est fourni."
+            )
+        from databricks.sdk import WorkspaceClient
 
-    workspace = WorkspaceClient()
-    token = workspace.postgres.generate_database_credential(
-        endpoint=args.lakebase_endpoint
-    ).token
-    user = args.pg_user or workspace.current_user.me().user_name
+        LOGGER.info("SDK Databricks version %s", version_sdk())
+        workspace = WorkspaceClient()
+        mot_de_passe = generer_jeton_lakebase(workspace, args.lakebase_endpoint)
+        user = args.pg_user or workspace.current_user.me().user_name
 
     LOGGER.info("Connexion Lakebase %s/%s en tant que %s", args.pg_host, args.pg_database, user)
     return psycopg.connect(
@@ -139,7 +217,7 @@ def connect(args: argparse.Namespace) -> psycopg.Connection:
         port=args.pg_port,
         dbname=args.pg_database,
         user=user,
-        password=token,
+        password=mot_de_passe,
         sslmode="require",
         autocommit=False,
     )

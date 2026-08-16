@@ -21,6 +21,7 @@ import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
+from uuid import uuid4
 
 import psycopg
 from psycopg.rows import dict_row
@@ -189,12 +190,49 @@ class LakebasePool:
         return self._workspace_client().current_user.me().user_name
 
     def _generate_token(self) -> str:
+        """Génère un identifiant Lakebase, quelle que soit la génération d'API du SDK.
+
+        Deux générations coexistent, et la version embarquée dans le runtime
+        Databricks Apps n'est pas forcément celle du poste de développement :
+        ``w.postgres`` (projects / branches / endpoints, actuelle) et
+        ``w.database`` (database instances, antérieure). On essaie la plus
+        récente, puis l'autre. Sans ce repli, l'application démarre puis échoue
+        sur un ``AttributeError`` qui ne dit ni pourquoi ni comment y remédier.
+        """
         endpoint = self._settings.lakebase_endpoint
         if not endpoint:
             raise ConfigurationError("LAKEBASE_ENDPOINT est requis en mode OAuth.")
-        return self._workspace_client().postgres.generate_database_credential(
-            endpoint=endpoint
-        ).token
+
+        workspace = self._workspace_client()
+        tentatives: list[str] = []
+
+        api_postgres = getattr(workspace, "postgres", None)
+        if api_postgres is not None and hasattr(api_postgres, "generate_database_credential"):
+            try:
+                return api_postgres.generate_database_credential(endpoint=endpoint).token
+            except Exception as exc:  # on tente la génération suivante
+                tentatives.append(f"w.postgres : {exc}")
+        else:
+            tentatives.append("w.postgres : absent de cette version du SDK")
+
+        api_database = getattr(workspace, "database", None)
+        if api_database is not None and hasattr(api_database, "generate_database_credential"):
+            try:
+                instance = endpoint.split("/")[1] if "/" in endpoint else endpoint
+                return api_database.generate_database_credential(
+                    request_id=str(uuid4()), instance_names=[instance]
+                ).token
+            except Exception as exc:  # dernière piste
+                tentatives.append(f"w.database : {exc}")
+        else:
+            tentatives.append("w.database : absent de cette version du SDK")
+
+        LOGGER.error("Génération d'identifiant Lakebase impossible : %s", " | ".join(tentatives))
+        raise ConfigurationError(
+            "Impossible d'obtenir un identifiant de connexion à Lakebase. "
+            "Relevez la version de databricks-sdk dans app/requirements.txt, ou "
+            "fournissez PGPASSWORD via la ressource « postgres » de l'application."
+        )
 
     def _start_refresher(self) -> None:
         def boucle() -> None:

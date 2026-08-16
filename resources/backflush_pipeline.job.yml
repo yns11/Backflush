@@ -50,7 +50,13 @@ resources:
             client: "3"
             dependencies:
               - psycopg[binary]>=3.2,<4.0
-              - databricks-sdk>=0.38,<1.0
+              # databricks-sdk n'est volontairement PAS borné en version haute.
+              # L'API `w.postgres`, qui génère les identifiants Lakebase de la
+              # génération « projects / branches / endpoints », n'existe pas dans
+              # les versions anciennes : un plancher trop bas fait échouer la
+              # publication par AttributeError. Le job sait néanmoins se replier
+              # sur l'API antérieure, et diagnostique la version installée.
+              - databricks-sdk>=0.38
 
       tasks:
         - task_key: construire_modele_gold
