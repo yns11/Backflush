@@ -14,6 +14,25 @@
 bundle:
   name: backflush_analytics
 
+# =============================================================================
+# Synchronisation des fichiers
+# =============================================================================
+# ⚠️ Par défaut, un bundle EXCLUT de la synchronisation tout ce que `.gitignore`
+# ignore. Or `app/server/static/` y figure : c'est un artefact de build, qui n'a
+# rien à faire dans l'historique Git.
+#
+# Sans la ré-inclusion ci-dessous, le déploiement réussit, l'application démarre,
+# l'API répond… et l'interface est absente. Panne silencieuse : rien n'échoue,
+# il ne manque « que » le frontend.
+#
+# La contrepartie est que le bundle compilé doit exister au moment du
+# déploiement. `bundle deploy` ne le vérifie pas : utilisez `scripts/deploy.sh`,
+# qui compile puis déploie, plutôt que d'enchaîner les commandes à la main.
+# =============================================================================
+sync:
+  include:
+    - app/server/static/**
+
 variables:
   catalog:
     description: Catalogue Unity Catalog du modèle gold.

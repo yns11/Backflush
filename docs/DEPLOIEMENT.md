@@ -43,8 +43,29 @@ Quatre valeurs à conserver :
 ./scripts/build_frontend.sh
 ```
 
-Le bundle est écrit dans `app/server/static`. **Il n'est pas versionné** : sans
-cette étape, l'application déployée sert l'API mais aucune interface.
+Le bundle est écrit dans `app/server/static`, dossier **non versionné** (c'est un
+artefact de build) mais **explicitement ré-inclus** dans la synchronisation par
+le bloc `sync.include` de `databricks.yml`. Sans cette ré-inclusion, le bundle
+Databricks l'écarterait comme tout fichier ignoré par Git, et l'application se
+déploierait sans interface — sans qu'aucune commande n'échoue.
+
+### Quand faut-il recompiler ?
+
+| Situation | Recompiler ? |
+|---|---|
+| Premier déploiement, ou dossier de travail neuf (clone, machine différente) | **Oui** — `app/server/static` n'existe pas encore |
+| Un fichier de `app/client/**` a changé | **Oui** |
+| Seuls le backend, le SQL, les jobs ou la documentation ont changé | Non — le bundle existant reste valide |
+| Redéploiement à l'identique, même poste | Non |
+
+En cas de doute, recompilez : l'opération prend quelques secondes et est
+idempotente. Pour vérifier la fraîcheur sans réfléchir :
+
+```bash
+# Le bundle est-il postérieur au dernier changement de source frontend ?
+find app/client/src app/client/index.html -newer app/server/static/index.html 2>/dev/null | head
+# Aucune sortie = bundle à jour. Une ligne ou une erreur = recompiler.
+```
 
 ## 3. Valider et déployer le bundle
 
@@ -178,7 +199,7 @@ Puis, sur l'URL de l'application :
 | `permission denied for schema backflush (42501)` | Le schéma appartient au job (exécuté sous votre identité), pas au principal de service, qui n'a que `CAN_CONNECT_AND_CREATE` | Faire le `GRANT` de l'étape 5 — obligatoire, la ressource seule ne suffit pas |
 | Journal « Connexion par mot de passe injecté » | `LAKEBASE_ENDPOINT` absent : la ressource n'a fourni qu'un `PGPASSWORD` | Fonctionnel, mais la rotation dépend de la plateforme. Définir `LAKEBASE_ENDPOINT` pour que l'application gère son propre jeton |
 | `permission denied for table …` | Le `GRANT` de l'étape 5 n'a pas été fait, ou `app_service_principal` est vide dans le bundle | Refaire l'étape 5, redéployer, relancer le job |
-| Interface absente, API fonctionnelle | `scripts/build_frontend.sh` non exécuté avant le déploiement | Compiler puis redéployer |
+| Interface absente, API fonctionnelle | `scripts/build_frontend.sh` non exécuté avant le déploiement, ou bloc `sync.include` retiré de `databricks.yml` | Compiler, vérifier que `sync.include` couvre `app/server/static/**`, redéployer |
 | L'application plante au démarrage | `psycopg` absent des dépendances | Vérifier `app/requirements.txt` |
 | Première requête lente après une période creuse | Instance Lakebase mise à l'échelle zéro | Attendu ; le pre-ping du pool absorbe le réveil |
 | Assistant en `503` | Ressource `serving-endpoint` absente, ou principal de service sans `CAN_QUERY` | Attacher la ressource, accorder le droit |
