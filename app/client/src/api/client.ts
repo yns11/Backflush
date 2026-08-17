@@ -13,18 +13,42 @@ import type {
   Filtres,
   Fraicheur,
   Grille,
+  LigneArticle,
   LigneGrille,
+  LigneNomenclatureParam,
   LigneRepartition,
   LigneTopComposant,
   OptionsFiltres,
   PageGrille,
+  PageParametrage,
   ReponseAssistant,
   ReponseIndicateurs,
   Mesure,
+  ResumeParametrage,
   Sante,
   SemaineAgregee,
   SynthesePerimetre,
 } from './types'
+
+/** Paramètres communs aux deux écrans de paramétrage. */
+export interface RequeteParametrage {
+  recherche?: string | null
+  etat?: string
+  tri?: string
+  sens?: 'asc' | 'desc'
+  page?: number
+  taille?: number
+  [cle: string]: unknown
+}
+
+/** Sérialise une requête en chaîne d'URL, en omettant les valeurs absentes. */
+function encoder(params: Record<string, unknown>): string {
+  const query = new URLSearchParams()
+  for (const [cle, valeur] of Object.entries(params)) {
+    if (valeur !== null && valeur !== undefined && valeur !== '') query.set(cle, String(valeur))
+  }
+  return query.toString()
+}
 
 /** Erreur d'API portant le code HTTP et le message métier renvoyé par le serveur. */
 export class ErreurApi extends Error {
@@ -153,6 +177,31 @@ export const api = {
     filtres: Filtres
     page_active: string
   }) => poster<ReponseAssistant>('/api/assistant/chat', corps),
+
+  // -- Paramétrage : base article et nomenclature ---------------------------
+  resumeParametrage: () => appeler<ResumeParametrage>('/api/parametrage/resume'),
+
+  articles: (params: RequeteParametrage) =>
+    appeler<PageParametrage<LigneArticle>>(`/api/parametrage/articles?${encoder(params)}`),
+
+  nomenclature: (params: RequeteParametrage) =>
+    appeler<PageParametrage<LigneNomenclatureParam>>(
+      `/api/parametrage/nomenclature?${encoder(params)}`,
+    ),
+
+  basculerExclusion: (corps: { item_ids: string[]; exclu: boolean; motif?: string | null }) =>
+    poster<{ lignes: number; exclu: boolean }>('/api/parametrage/articles/exclusion', corps),
+
+  surchargerNomenclature: (corps: {
+    lignes: Array<{ parent_itemid: string; child_itemid: string }>
+    active: boolean
+    coef_bom?: number | null
+    motif?: string | null
+  }) => poster<{ lignes: number }>('/api/parametrage/nomenclature/surcharge', corps),
+
+  reinitialiserNomenclature: (corps: {
+    lignes: Array<{ parent_itemid: string; child_itemid: string }>
+  }) => poster<{ lignes: number }>('/api/parametrage/nomenclature/reinitialisation', corps),
 
   analyserLot: (corps: {
     grille: string

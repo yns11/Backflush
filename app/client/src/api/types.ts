@@ -226,7 +226,10 @@ export interface FicheComposant {
     parent_itemid: string
     parent_name: string | null
     programme: string | null
+    perimetre: string | null
+    /** Coefficient EFFECTIF : celui de l'ERP, ou sa correction si elle existe. */
     coef_bom: number | null
+    coef_surcharge: boolean
   }>
 }
 
@@ -238,7 +241,10 @@ export interface FicheParent {
     child_itemid: string
     child_name: string | null
     categorie: string | null
+    /** Coefficient EFFECTIF : celui de l'ERP, ou sa correction si elle existe. */
     coef_bom: number | null
+    coef_erp: number | null
+    coef_surcharge: boolean
     unite: string | null
     std_cost_price: number | null
   }>
@@ -269,9 +275,71 @@ export interface LigneEcartSynthese {
   ecart_brut: number
 }
 
+/** Une semaine du calendrier de la période, mouvementée ou non. */
+export interface SemaineCalendrier {
+  semaine_debut: string
+  annee: number
+  semaine: number
+}
+
 export interface SynthesePerimetre {
   perimetre: string
   mesure: Mesure
   production: LigneProductionSynthese[]
   ecarts: LigneEcartSynthese[]
+  /** Colonnes du tableau croisé : toute la période, trous compris. */
+  semaines: SemaineCalendrier[]
+}
+
+// ---------------------------------------------------------------------------
+// Paramétrage — base article et nomenclature
+// ---------------------------------------------------------------------------
+
+export interface LigneArticle {
+  item_id: string
+  item_name: string | null
+  categorie: string | null
+  programme: string | null
+  perimetre: string | null
+  type_produit: string | null
+  std_cost_price: number | null
+  std_unit: string | null
+  /** Impact absolu porté par la référence — à lire AVANT de l'exclure. */
+  impact_absolu: number
+  nb_semaines_en_ecart: number
+  exclu: boolean
+  motif: string | null
+  modifie_par: string | null
+  modifie_le: string | null
+}
+
+export interface LigneNomenclatureParam {
+  parent_itemid: string
+  child_itemid: string
+  bomid: string | null
+  parent_name: string | null
+  child_name: string | null
+  perimetre: string | null
+  unite: string | null
+  coef_origine: number | null
+  coef_effectif: number | null
+  active: boolean
+  coef_surcharge: boolean
+  motif: string | null
+  modifie_par: string | null
+  modifie_le: string | null
+}
+
+export interface PageParametrage<T> {
+  lignes: T[]
+  total: number
+  page: number
+  taille: number
+  nb_pages: number
+}
+
+export interface ResumeParametrage {
+  articles_exclus: number
+  lignes_desactivees: number
+  lignes_corrigees: number
 }

@@ -8,6 +8,8 @@
 
 import type { ReactNode } from 'react'
 
+import { BoutonPli, usePli } from './Repliable'
+
 export function Carte({
   titre,
   message,
@@ -15,25 +17,45 @@ export function Carte({
   legende,
   children,
   aide,
+  pliCle,
 }: {
   titre: string
   message?: ReactNode
   actions?: ReactNode
   legende?: ReactNode
   aide?: string
+  /**
+   * Rend la carte repliable, sous cet identifiant de mémorisation.
+   *
+   * Absent, la carte reste toujours ouverte : toutes n'ont pas vocation à être
+   * escamotées, et un chevron sur un bloc qu'on ne replie jamais est du bruit.
+   */
+  pliCle?: string
   children: ReactNode
 }) {
+  const { ouvert, basculer } = usePli(pliCle ?? '', true)
+  const repliable = Boolean(pliCle)
+  const affiche = !repliable || ouvert
+
   return (
     <section className="carte">
       <header className="carte__entete">
-        <h2 className="carte__titre" title={aide}>
+        {repliable && <BoutonPli ouvert={ouvert} basculer={basculer} libelle={titre} />}
+        <h2
+          className="carte__titre"
+          title={aide}
+          onClick={repliable ? basculer : undefined}
+          style={repliable ? { cursor: 'pointer' } : undefined}
+        >
           {titre}
         </h2>
-        {message && <span className="carte__message">{message}</span>}
-        {legende}
+        {message && affiche && <span className="carte__message">{message}</span>}
+        {affiche && legende}
         {actions && <div className="rang" style={{ marginLeft: 'auto' }}>{actions}</div>}
       </header>
-      <div className="carte__corps">{children}</div>
+      {/* Le contenu replié n'est pas monté : un graphique masqué qui continue
+          de se dessiner coûte autant qu'un graphique visible. */}
+      {affiche && <div className="carte__corps">{children}</div>}
     </section>
   )
 }

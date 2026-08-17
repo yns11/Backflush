@@ -3,28 +3,32 @@
  *
  * Trois principes :
  *
- * 1. **Montrer ce qu'on exclut.** L'histogramme couvre TOUT l'historique
- *    disponible, pas seulement la sélection : l'utilisateur voit d'un coup
- *    d'œil s'il coupe une période chargée.
+ * 1. **Montrer ce qu'on exclut.** La piste couvre TOUT l'historique disponible,
+ *    pas seulement la sélection : l'utilisateur voit d'un coup d'œil ce qu'il
+ *    laisse de côté.
  * 2. **Manipulation directe.** Poignées glissables, plage déplaçable en bloc,
  *    et raccourcis pour les horizons usuels d'un pilotage hebdomadaire.
  * 3. **Accessible au clavier.** Chaque poignée est un `slider` ARIA : flèches
  *    pour une semaine, Origine/Fin pour les bornes. Un composant de brossage
  *    utilisable uniquement à la souris exclut une partie des utilisateurs.
  *
- * La barre encode |impact financier| de la semaine, en rampe séquentielle
- * (magnitude continue, une seule teinte) — pas en teintes catégorielles.
+ * Chaque case porte son NUMÉRO DE SEMAINE, et rien d'autre. La version
+ * précédente y encodait l'impact financier en histogramme : deux lectures se
+ * disputaient alors le même objet — « où suis-je dans le temps » et « quand
+ * est-ce que ça a coûté cher » —, la seconde étant déjà servie, en plus grand
+ * et avec ses axes, par la tendance hebdomadaire juste en dessous. Repère
+ * temporel d'un côté, mesure de l'autre.
+ *
+ * La piste est en HTML et non en SVG : un SVG étiré en largeur (`preserveAspect
+ * Ratio="none"`, nécessaire pour occuper la largeur disponible) déforme aussi
+ * le texte. Des cases en grille CSS restent nettes à toute largeur, et le
+ * numéro de semaine est ici le contenu principal.
  */
 
 import { useCallback, useMemo, useRef, useState } from 'react'
 
 import type { SemaineAgregee } from '@/api/types'
-import { date as formatDate, euro } from '@/lib/format'
-import { useInfobulle } from './charts/primitives'
-
-const LARGEUR = 1000
-const HAUTEUR = 62
-const MARGE_BAS = 16
+import { date as formatDate } from '@/lib/format'
 
 interface Preset {
   cle: string
@@ -54,23 +58,14 @@ export function SlicerTemporel({
   dateFin: string | null
   onChangement: (debut: string | null, fin: string | null) => void
 }) {
-  const svgRef = useRef<SVGSVGElement>(null)
+  const pisteRef = useRef<HTMLDivElement>(null)
   const [glissement, setGlissement] = useState<'debut' | 'fin' | 'plage' | null>(null)
-  const ancre = useRef<{ x: number; debut: number; fin: number } | null>(null)
-  const { afficher, masquer, element: infobulle } = useInfobulle()
+  const ancre = useRef<{ index: number; debut: number; fin: number } | null>(null)
 
   const cles = useMemo(() => semaines.map((s) => s.semaine_debut), [semaines])
 
   const indexDebut = useMemo(() => indexPour(cles, dateDebut, 0), [cles, dateDebut])
   const indexFin = useMemo(() => indexPour(cles, dateFin, cles.length - 1), [cles, dateFin])
-
-  const maxImpact = useMemo(
-    () => Math.max(1, ...semaines.map((s) => Math.abs(Number(s.ecart_valorise_absolu)))),
-    [semaines],
-  )
-
-  const pas = semaines.length > 0 ? LARGEUR / semaines.length : LARGEUR
-  const largeurBarre = Math.max(pas - 2, 1)
 
   const appliquer = useCallback(
     (debut: number, fin: number) => {
@@ -84,7 +79,7 @@ export function SlicerTemporel({
 
   const indexDepuisPointeur = useCallback(
     (clientX: number): number => {
-      const rect = svgRef.current?.getBoundingClientRect()
+      const rect = pisteRef.current?.getBoundingClientRect()
       if (!rect || rect.width === 0 || semaines.length === 0) return 0
       const ratio = (clientX - rect.left) / rect.width
       return Math.max(0, Math.min(semaines.length - 1, Math.floor(ratio * semaines.length)))
@@ -92,14 +87,20 @@ export function SlicerTemporel({
     [semaines.length],
   )
 
-  const demarrer = (genre: 'debut' | 'fin' | 'plage') => (evenement: React.PointerEvent) => {
-    evenement.preventDefault()
-    evenement.currentTarget.setPointerCapture(evenement.pointerId)
-    setGlissement(genre)
-    ancre.current = { x: evenement.clientX, debut: indexDebut, fin: indexFin }
-  }
+  const demarrer =
+    (genre: 'debut' | 'fin' | 'plage') => (evenement: React.PointerEvent<HTMLElement>) => {
+      evenement.preventDefault()
+      evenement.stopPropagation()
+      evenement.currentTarget.setPointerCapture(evenement.pointerId)
+      setGlissement(genre)
+      ancre.current = {
+        index: indexDepuisPointeur(evenement.clientX),
+        debut: indexDebut,
+        fin: indexFin,
+      }
+    }
 
-  const deplacer = (evenement: React.PointerEvent) => {
+  const deplacer = (evenement: React.PointerEvent<HTMLElement>) => {
     if (!glissement || !ancre.current) return
     const index = indexDepuisPointeur(evenement.clientX)
     if (glissement === 'debut') appliquer(index, indexFin)
@@ -108,15 +109,14 @@ export function SlicerTemporel({
       // Déplacement en bloc : la largeur de la fenêtre est préservée, et la
       // plage est retenue aux bornes de l'historique plutôt que rognée.
       const depart = ancre.current
-      const decalage = indexDepuisPointeur(evenement.clientX) - indexDepuisPointeur(depart.x)
       const largeurPlage = depart.fin - depart.debut
-      let debut = depart.debut + decalage
+      let debut = depart.debut + (index - depart.index)
       debut = Math.max(0, Math.min(debut, semaines.length - 1 - largeurPlage))
       appliquer(debut, debut + largeurPlage)
     }
   }
 
-  const arreter = (evenement: React.PointerEvent) => {
+  const arreter = (evenement: React.PointerEvent<HTMLElement>) => {
     if (evenement.currentTarget.hasPointerCapture(evenement.pointerId)) {
       evenement.currentTarget.releasePointerCapture(evenement.pointerId)
     }
@@ -168,15 +168,14 @@ export function SlicerTemporel({
     )
   }
 
-  const xDebut = indexDebut * pas
-  const xFin = (indexFin + 1) * pas
   const nbSelectionnees = indexFin - indexDebut + 1
+  const pourcent = (index: number) => `${(index / semaines.length) * 100}%`
 
   return (
     <div className="slicer">
       <div className="slicer__entete">
         <span className="slicer__periode">
-          {formatDate(cles[indexDebut] ?? null)} → {formatDate(cles[indexFin] ?? null)}
+          {formatDate(cles[indexDebut] ?? null)} → {formatDate(dimancheDeLaSemaine(cles[indexFin]))}
         </span>
         <span className="attenue">
           {nbSelectionnees} semaine{nbSelectionnees > 1 ? 's' : ''} sur {semaines.length}
@@ -197,112 +196,91 @@ export function SlicerTemporel({
         </div>
       </div>
 
-      <div className="slicer__toile">
-        <svg
-          ref={svgRef}
-          width="100%"
-          height={HAUTEUR + MARGE_BAS}
-          viewBox={`0 0 ${LARGEUR} ${HAUTEUR + MARGE_BAS}`}
-          preserveAspectRatio="none"
-          onPointerMove={deplacer}
-          onPointerUp={arreter}
-          onPointerCancel={arreter}
-          onMouseLeave={masquer}
-          role="group"
-          aria-label="Sélection de la plage de semaines"
-        >
-          {semaines.map((semaine, index) => {
-            const valeur = Math.abs(Number(semaine.ecart_valorise_absolu))
-            const hauteurBarre = Math.max(2, (valeur / maxImpact) * (HAUTEUR - 6))
-            const dansSelection = index >= indexDebut && index <= indexFin
-            return (
-              <rect
-                key={semaine.semaine_debut}
-                x={index * pas + 1}
-                y={HAUTEUR - hauteurBarre}
-                width={largeurBarre}
-                height={hauteurBarre}
-                rx={2}
-                fill={dansSelection ? 'var(--sequentiel-400)' : 'var(--grille)'}
-                onMouseMove={(evenement) =>
-                  afficher(evenement, {
-                    titre: semaine.semaine_libelle,
-                    lignes: [
-                      { libelle: 'Impact absolu', valeur: euro(valeur, 0, true) },
-                      { libelle: 'Impact net', valeur: euro(Number(semaine.ecart_valorise), 0, true) },
-                      { libelle: 'Lignes en écart', valeur: String(semaine.nb_lignes_ecart) },
-                    ],
-                  })
-                }
-              />
-            )
-          })}
+      <div
+        className="slicer__piste"
+        ref={pisteRef}
+        onPointerMove={deplacer}
+        onPointerUp={arreter}
+        onPointerCancel={arreter}
+        role="group"
+        aria-label="Sélection de la plage de semaines"
+        style={{ gridTemplateColumns: `repeat(${semaines.length}, minmax(0, 1fr))` }}
+      >
+        {semaines.map((semaine, index) => {
+          const dansSelection = index >= indexDebut && index <= indexFin
+          return (
+            <button
+              key={semaine.semaine_debut}
+              type="button"
+              tabIndex={-1}
+              className={`slicer__case${dansSelection ? ' slicer__case--active' : ''}`}
+              title={`${semaine.semaine_libelle} — semaine du ${formatDate(semaine.semaine_debut)} au ${formatDate(dimancheDeLaSemaine(semaine.semaine_debut))}`}
+              onClick={() => {
+                // Cliquer une case hors sélection étend la plage de son côté :
+                // plus direct que d'aller viser la poignée.
+                if (index < indexDebut) appliquer(index, indexFin)
+                else if (index > indexFin) appliquer(indexDebut, index)
+              }}
+            >
+              {numeroSemaine(semaine)}
+            </button>
+          )
+        })}
 
-          {/* Voiles sur les périodes exclues */}
-          <rect x={0} y={0} width={xDebut} height={HAUTEUR} fill="var(--surface)" opacity={0.62} />
-          <rect
-            x={xFin}
-            y={0}
-            width={Math.max(LARGEUR - xFin, 0)}
-            height={HAUTEUR}
-            fill="var(--surface)"
-            opacity={0.62}
-          />
-
-          {/* Plage sélectionnée, déplaçable en bloc */}
-          <rect
-            x={xDebut}
-            y={0}
-            width={Math.max(xFin - xDebut, 1)}
-            height={HAUTEUR}
-            fill="transparent"
-            stroke="var(--serie-1)"
-            strokeWidth={1.5}
-            style={{ cursor: glissement === 'plage' ? 'grabbing' : 'grab' }}
-            onPointerDown={demarrer('plage')}
-          />
-
-          {(['debut', 'fin'] as const).map((borne) => {
-            const x = borne === 'debut' ? xDebut : xFin
-            const index = borne === 'debut' ? indexDebut : indexFin
-            return (
-              <g
-                key={borne}
-                className="slicer__poignee"
-                onPointerDown={demarrer(borne)}
-                onKeyDown={clavier(borne)}
-                tabIndex={0}
-                role="slider"
-                aria-label={borne === 'debut' ? 'Première semaine' : 'Dernière semaine'}
-                aria-valuemin={0}
-                aria-valuemax={semaines.length - 1}
-                aria-valuenow={index}
-                aria-valuetext={semaines[index]?.semaine_libelle ?? ''}
-              >
-                {/* Cible de saisie large, marque fine : confort de pointage sans
-                    surcharge visuelle. */}
-                <rect x={x - 9} y={0} width={18} height={HAUTEUR} fill="transparent" />
-                <rect x={x - 2} y={0} width={4} height={HAUTEUR} rx={2} fill="var(--serie-1)" />
-                <rect x={x - 4} y={HAUTEUR / 2 - 9} width={8} height={18} rx={3} fill="var(--serie-1)" />
-              </g>
-            )
-          })}
-
-          <line x1={0} y1={HAUTEUR} x2={LARGEUR} y2={HAUTEUR} stroke="var(--axe)" strokeWidth={1} />
-        </svg>
-
+        {/* Plage sélectionnée, déplaçable en bloc */}
         <div
-          className="rang attenue"
-          style={{ justifyContent: 'space-between', fontSize: 10.5, marginTop: 2 }}
-        >
-          <span>{semaines[0]?.semaine_libelle}</span>
-          <span>Impact absolu par semaine</span>
-          <span>{semaines[semaines.length - 1]?.semaine_libelle}</span>
-        </div>
+          className="slicer__plage"
+          style={{
+            left: pourcent(indexDebut),
+            width: pourcent(indexFin + 1 - indexDebut),
+            cursor: glissement === 'plage' ? 'grabbing' : 'grab',
+          }}
+          onPointerDown={demarrer('plage')}
+        />
+
+        {(['debut', 'fin'] as const).map((borne) => {
+          const index = borne === 'debut' ? indexDebut : indexFin
+          return (
+            <div
+              key={borne}
+              className="slicer__poignee"
+              style={{ left: pourcent(borne === 'debut' ? indexDebut : indexFin + 1) }}
+              onPointerDown={demarrer(borne)}
+              onKeyDown={clavier(borne)}
+              tabIndex={0}
+              role="slider"
+              aria-label={borne === 'debut' ? 'Première semaine' : 'Dernière semaine'}
+              aria-valuemin={0}
+              aria-valuemax={semaines.length - 1}
+              aria-valuenow={index}
+              aria-valuetext={semaines[index]?.semaine_libelle ?? ''}
+            />
+          )
+        })}
       </div>
-      {infobulle}
     </div>
   )
+}
+
+/** « 2026-S14 » → « S14 ». Le libellé complet reste dans l'infobulle native. */
+function numeroSemaine(semaine: SemaineAgregee): string {
+  return semaine.semaine_libelle.replace(/^\d{4}-/, '')
+}
+
+/**
+ * Dimanche de la semaine ISO commençant au lundi donné.
+ *
+ * La borne de sélection est le LUNDI de la dernière semaine retenue : l'afficher
+ * tel quel laisserait croire que les six derniers jours sont exclus, alors que
+ * la semaine entière est comprise. La période annoncée doit couvrir ce qui est
+ * réellement analysé.
+ */
+export function dimancheDeLaSemaine(lundi: string | null | undefined): string | null {
+  if (!lundi) return null
+  const date = new Date(`${lundi}T00:00:00Z`)
+  if (Number.isNaN(date.getTime())) return lundi
+  date.setUTCDate(date.getUTCDate() + 6)
+  return date.toISOString().slice(0, 10)
 }
 
 /** Index de la semaine correspondant à une date, ou une valeur de repli. */

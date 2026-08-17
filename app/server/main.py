@@ -29,10 +29,12 @@ from app.server.api import (
     routes_export,
     routes_grid,
     routes_meta,
+    routes_parametrage,
 )
 from app.server.core.config import get_settings
 from app.server.core.errors import BackflushError
 from app.server.core.lakebase import LakebasePool
+from app.server.data.parametrage import DepotParametrage
 from app.server.data.repository import Repository
 from app.server.services.assistant import AssistantService
 
@@ -53,6 +55,7 @@ async def cycle_de_vie(application: FastAPI):
     application.state.settings = settings
     application.state.pool = pool
     application.state.repository = Repository(pool)
+    application.state.parametrage = DepotParametrage(pool)
     application.state.assistant = AssistantService(application.state.repository, settings)
 
     LOGGER.info("Démarrage : %s", settings.resume())
@@ -131,6 +134,7 @@ for routeur in (
     routes_grid.routeur,
     routes_export.routeur,
     routes_assistant.routeur,
+    routes_parametrage.routeur,
 ):
     app.include_router(routeur)
 

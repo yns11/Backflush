@@ -18,6 +18,15 @@ import { euro, nombre, valeurIndicateur } from '@/lib/format'
 import { TendanceHebdo } from './charts/TendanceHebdo'
 import { EtatErreur, EtatVide, Squelette } from './Etats'
 
+/** Étendue d'un jeu de coefficients : une valeur, ou l'intervalle observé. */
+function etendueCoef(valeurs: number[]): string {
+  const propres = valeurs.filter((valeur) => Number.isFinite(valeur))
+  if (propres.length === 0) return '—'
+  const min = Math.min(...propres)
+  const max = Math.max(...propres)
+  return min === max ? nombre(min, 4) : `${nombre(min, 4)} – ${nombre(max, 4)}`
+}
+
 export function TiroirFiche({
   genre,
   identifiant,
@@ -163,6 +172,14 @@ export function TiroirFiche({
                         parent.programme ?? '—',
                         nombre(parent.coef_bom, 4),
                       ])}
+                      // Un coefficient ne s'additionne pas : on affiche son
+                      // étendue, qui est ce qui compte ici (uniforme ou non).
+                      totaux={[
+                        null,
+                        null,
+                        null,
+                        etendueCoef(donnees.parents.map((parent) => Number(parent.coef_bom))),
+                      ]}
                       note={
                         new Set(donnees.parents.map((parent) => Number(parent.coef_bom))).size > 1
                           ? "Coefficients différents selon les parents : l'écart en équivalent produit n'est pas calculable."
@@ -183,13 +200,33 @@ export function TiroirFiche({
                     />
                   ) : (
                     <TableauSimple
-                      entetes={['Composant', 'Désignation', 'Coef', 'Coût std']}
+                      entetes={['Composant', 'Désignation', 'Coef retenu', 'Coût std']}
                       lignes={donnees.nomenclature.map((ligne) => [
                         ligne.child_itemid,
                         ligne.child_name ?? '—',
-                        `${nombre(ligne.coef_bom, 4)} ${ligne.unite ?? ''}`,
+                        // Une correction est signalée avec la valeur d'origine :
+                        // un coefficient corrigé sans repère n'est plus vérifiable.
+                        ligne.coef_surcharge
+                          ? `${nombre(ligne.coef_bom, 4)} ${ligne.unite ?? ''} (ERP ${nombre(ligne.coef_erp, 4)})`
+                          : `${nombre(ligne.coef_bom, 4)} ${ligne.unite ?? ''}`,
                         ligne.std_cost_price === null ? '—' : euro(ligne.std_cost_price, 4),
                       ])}
+                      // Le coût matière d'un parent : somme des coefficients
+                      // multipliés par les coûts standards. C'est le total qui
+                      // a un sens sur une nomenclature.
+                      totaux={[
+                        null,
+                        null,
+                        null,
+                        euro(
+                          donnees.nomenclature.reduce(
+                            (somme, ligne) =>
+                              somme + Number(ligne.coef_bom ?? 0) * Number(ligne.std_cost_price ?? 0),
+                            0,
+                          ),
+                          2,
+                        ),
+                      ]}
                     />
                   )}
                 </section>
@@ -202,13 +239,23 @@ export function TiroirFiche({
   )
 }
 
+/**
+ * Petite table du tiroir, avec pied de totaux.
+ *
+ * `totaux` porte une chaîne par colonne, ou `null` là où il n'y a rien à
+ * additionner. Le calcul est fait par l'appelant, qui seul connaît la nature de
+ * chaque colonne : sommer un coefficient de nomenclature n'aurait aucun sens,
+ * alors que sommer des coûts en a un.
+ */
 function TableauSimple({
   entetes,
   lignes,
+  totaux,
   note,
 }: {
   entetes: string[]
   lignes: string[][]
+  totaux?: Array<string | null>
   note?: string
 }) {
   return (
@@ -234,6 +281,19 @@ function TableauSimple({
             </tr>
           ))}
         </tbody>
+        {totaux && (
+          <tfoot className="tableau__pied">
+            <tr>
+              {entetes.map((entete, index) => (
+                <td key={entete} className={index >= 2 ? 'droite' : ''}>
+                  <strong>
+                    {index === 0 ? `Total (${lignes.length})` : (totaux[index] ?? '')}
+                  </strong>
+                </td>
+              ))}
+            </tr>
+          </tfoot>
+        )}
       </table>
       {note && (
         <p className="attenue" style={{ marginTop: 6, fontSize: 11.5 }}>

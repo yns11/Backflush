@@ -12,12 +12,14 @@ import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 
 import { api } from '@/api/client'
+import type { Indicateur } from '@/api/types'
 import { Carte, Legende } from '@/components/Carte'
+import { BlocRepliable } from '@/components/Repliable'
 import { BandeauIndicateurs } from '@/components/Indicateurs'
 import { EtatVide, Squelette, VueDonnees } from '@/components/Etats'
 import { BarresDivergentes, type ElementBarre } from '@/components/charts/BarresDivergentes'
 import { TendanceHebdo } from '@/components/charts/TendanceHebdo'
-import { euro, nombre, pourcent } from '@/lib/format'
+import { euro, nombre, pourcent, valeurIndicateur } from '@/lib/format'
 import { useFiltres } from '@/state/filtres'
 import { useMesure } from '@/state/mesure'
 import { useNavigation } from '@/state/navigation'
@@ -98,6 +100,11 @@ export function Synthese() {
 
   return (
     <div className="pile">
+      <BlocRepliable
+        cle="synthese.kpis"
+        titre="Indicateurs"
+        resume={resumeIndicateurs(indicateurs.data?.indicateurs)}
+      >
       <BandeauIndicateurs
         indicateurs={indicateurs.data?.indicateurs}
         chargement={indicateurs.isPending}
@@ -119,6 +126,7 @@ export function Synthese() {
           }
         }}
       />
+      </BlocRepliable>
 
       {indicateurs.data && (
         <ConcentrationCarte
@@ -128,6 +136,7 @@ export function Synthese() {
       )}
 
       <Carte
+        pliCle="synthese.tendance"
         titre="Tendance hebdomadaire"
         message={messageTendance}
         aide="Panneau haut : quantités théorique et réelle. Panneau bas : impact financier signé."
@@ -164,6 +173,7 @@ export function Synthese() {
 
       <div className="grille-graphiques grille-graphiques--trois">
         <Carte
+          pliCle="synthese.programme"
           titre="Impact par programme"
           message="Cliquer pour filtrer et descendre au détail"
           legende={
@@ -210,6 +220,7 @@ export function Synthese() {
         </Carte>
 
         <Carte
+          pliCle="synthese.perimetre"
           titre="Impact par périmètre"
           message="Cliquer pour filtrer et descendre au détail"
           aide="Le périmètre est la ligne de production du parent fabriqué. C'est la maille sur laquelle l'écart en équivalent produit est calculable."
@@ -256,7 +267,11 @@ export function Synthese() {
           </VueDonnees>
         </Carte>
 
-        <Carte titre="Impact par catégorie de composant" message="Cliquer pour filtrer">
+        <Carte
+          pliCle="synthese.categorie"
+          titre="Impact par catégorie de composant"
+          message="Cliquer pour filtrer"
+        >
           <VueDonnees
             chargement={categories.isPending}
             erreur={categories.error}
@@ -289,6 +304,7 @@ export function Synthese() {
 
       <div className="grille-graphiques grille-graphiques--deux">
         <Carte
+          pliCle="synthese.top"
           titre="Top 12 des références par impact"
           message="Cliquer pour ouvrir la fiche de la référence"
         >
@@ -325,6 +341,7 @@ export function Synthese() {
         </Carte>
 
         <Carte
+          pliCle="synthese.statuts"
           titre="Nature des anomalies"
           aide="Le statut de ligne complète le type d'écart : il indique si la nomenclature ou le mouvement de stock est en cause."
         >
@@ -364,6 +381,41 @@ export function Synthese() {
                       </tr>
                     ))}
                   </tbody>
+                  <tfoot className="tableau__pied">
+                    <tr>
+                      <td>
+                        <strong>Total ({donnees.lignes.length})</strong>
+                      </td>
+                      <td className="droite">
+                        <strong>
+                          {nombre(
+                            donnees.lignes.reduce((s, l) => s + Number(l.nb_lignes), 0),
+                          )}
+                        </strong>
+                      </td>
+                      <td className="droite">
+                        <strong>
+                          {euro(
+                            donnees.lignes.reduce((s, l) => s + Number(l.ecart_valorise), 0),
+                            0,
+                            true,
+                          )}
+                        </strong>
+                      </td>
+                      <td className="droite">
+                        <strong>
+                          {euro(
+                            donnees.lignes.reduce(
+                              (s, l) => s + Number(l.ecart_valorise_absolu),
+                              0,
+                            ),
+                            0,
+                            true,
+                          )}
+                        </strong>
+                      </td>
+                    </tr>
+                  </tfoot>
                 </table>
                 <p className="attenue" style={{ marginTop: 10, fontSize: 11.5 }}>
                   « Hors nomenclature » = composant sorti sans ligne de nomenclature (erreur de
@@ -377,6 +429,17 @@ export function Synthese() {
       </div>
     </div>
   )
+}
+
+/** Les deux chiffres qu'un responsable veut voir même bandeau replié. */
+function resumeIndicateurs(indicateurs: Indicateur[] | undefined): string {
+  if (!indicateurs) return ''
+  const net = indicateurs.find((i) => i.cle === 'ecart_valorise_net')
+  const lignes = indicateurs.find((i) => i.cle === 'nb_lignes_ecart')
+  const parts: string[] = []
+  if (net) parts.push(`${valeurIndicateur(net.valeur, net.format)} d'impact net`)
+  if (lignes) parts.push(`${nombre(lignes.valeur)} ligne(s) en écart`)
+  return parts.join(' · ')
 }
 
 function ConcentrationCarte({

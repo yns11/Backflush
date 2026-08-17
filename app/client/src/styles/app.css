@@ -68,16 +68,41 @@ textarea {
   white-space: nowrap;
 }
 
+/* Logo eMotors. Les deux fichiers sont des images tramées avec leur propre
+   fond (le logo clair est sur blanc, le sombre sur marine) : le coin arrondi
+   les fait lire comme une plaque de marque plutôt que comme un rectangle
+   rapporté. La bascule suit la même logique à trois états que les jetons de
+   couleur — attribut explicite d'abord, requête média sinon. */
 .entete__logo {
-  display: grid;
-  place-items: center;
-  width: 28px;
-  height: 28px;
+  height: 40px;
+  width: auto;
+  flex: none;
   border-radius: var(--rayon-s);
-  background: var(--serie-1);
-  color: #fff;
-  font-size: 14px;
-  font-weight: 700;
+}
+
+.entete__logo--sombre {
+  display: none;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .entete__logo--clair {
+    display: none;
+  }
+  :root:not([data-theme='light']) .entete__logo--sombre {
+    display: block;
+  }
+}
+
+:root[data-theme='dark'] .entete__logo--clair {
+  display: none;
+}
+
+:root[data-theme='dark'] .entete__logo--sombre {
+  display: block;
+}
+
+:root[data-theme='light'] .entete__logo--clair {
+  display: block;
 }
 
 .entete__sous-titre {
@@ -404,14 +429,189 @@ textarea {
   color: var(--serie-1);
 }
 
-.slicer__toile {
+/* Piste du slicer : une case par semaine, en grille CSS.
+   Hauteur ramenée de 62 px + 16 px de légende à 34 px — l'ancien histogramme
+   occupait une place de graphique pour une information déjà tracée, avec ses
+   axes, par la tendance hebdomadaire. */
+.slicer__piste {
   position: relative;
+  display: grid;
+  height: 34px;
+  gap: 1px;
   user-select: none;
   touch-action: none;
 }
 
+.slicer__case {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--grille);
+  border-radius: var(--rayon-s);
+  background: var(--plan);
+  color: var(--encre-attenuee);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.slicer__case--active {
+  background: var(--selection);
+  border-color: var(--sequentiel-250);
+  color: var(--encre);
+  font-weight: 650;
+}
+
+.slicer__plage {
+  position: absolute;
+  top: -1px;
+  bottom: -1px;
+  border: 1.5px solid var(--serie-1);
+  border-radius: var(--rayon-s);
+  pointer-events: auto;
+}
+
 .slicer__poignee {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 14px;
+  margin-left: -7px;
   cursor: ew-resize;
+  background: transparent;
+}
+
+/* Marque fine centrée dans une cible de saisie large : confort de pointage
+   sans surcharge visuelle. */
+.slicer__poignee::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 4px;
+  margin-left: -2px;
+  border-radius: 2px;
+  background: var(--serie-1);
+}
+
+.slicer__poignee:focus-visible {
+  outline: none;
+}
+
+.slicer__poignee:focus-visible::after {
+  box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--serie-1);
+}
+
+/* --- Boîte de dialogue --------------------------------------------------- */
+.dialogue {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: 60;
+  width: min(520px, calc(100vw - 2 * var(--espace-4)));
+  max-height: calc(100vh - 2 * var(--espace-5));
+  overflow: auto;
+  padding: var(--espace-4);
+  transform: translate(-50%, -50%);
+  background: var(--surface-elevee);
+  border: 1px solid var(--bordure-forte);
+  border-radius: var(--rayon-m);
+  box-shadow: var(--ombre);
+}
+
+/* --- Blocs repliables ---------------------------------------------------- */
+.pli {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  flex: none;
+  padding: 0;
+  border: 0;
+  border-radius: var(--rayon-s);
+  background: transparent;
+  color: var(--encre-attenuee);
+  cursor: pointer;
+}
+
+.pli:hover {
+  background: var(--survol);
+  color: var(--encre);
+}
+
+.pli__chevron {
+  display: block;
+  font-size: 11px;
+  line-height: 1;
+  /* Replié = chevron vers la droite, déplié = vers le bas. La rotation est
+     animée : elle indique le sens de l'action autant que l'état. */
+  transform: rotate(-90deg);
+  transition: transform 120ms ease;
+}
+
+.pli__chevron--ouvert {
+  transform: rotate(0deg);
+}
+
+.bloc {
+  margin-bottom: var(--espace-4);
+  background: var(--surface);
+  border: 1px solid var(--bordure);
+  border-radius: var(--rayon-m);
+}
+
+.bloc__entete {
+  display: flex;
+  align-items: center;
+  gap: var(--espace-2);
+  padding: 6px var(--espace-3);
+}
+
+.bloc:not(.bloc--replie) .bloc__entete {
+  border-bottom: 1px solid var(--bordure);
+}
+
+.bloc__titre {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--encre-attenuee);
+  cursor: pointer;
+}
+
+.bloc__resume {
+  color: var(--encre-secondaire);
+  font-size: 12px;
+}
+
+.bloc__corps {
+  padding: var(--espace-3) var(--espace-4) var(--espace-4);
+}
+
+/* Un bloc replié n'a plus de corps : sa marge basse suffit à le séparer du
+   suivant, et son en-tête devient une simple barre. */
+.bloc--replie {
+  margin-bottom: var(--espace-3);
+}
+
+/* La barre de filtres et la piste temporelle apportent déjà leur propre
+   encadrement : dans un bloc, elles ne doivent pas en ajouter un second. */
+.bloc__corps > .filtres,
+.bloc__corps > .slicer {
+  margin-bottom: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.bloc__corps > .kpis {
+  margin-bottom: 0;
 }
 
 /* --- Indicateurs -------------------------------------------------------- */
@@ -978,11 +1178,28 @@ textarea {
 /* Collé en bas de la zone défilante : le total reste sous les yeux pendant le
    parcours des lignes, ce qui est tout l'intérêt d'un pied de tableau. */
 .tableau__pied td {
+  background: var(--fond-carte);
+  border-top: 2px solid var(--bordure);
+}
+
+/* Cale de fin de corps : le pied collant recouvre ce qui passe dessous, y
+   compris la dernière ligne une fois le défilement arrivé au bout. Une ligne
+   vide de sa hauteur rend cette place, sans toucher aux lignes de données. */
+.tableau__cale td {
+  height: 32px;
+  padding: 0;
+  border: 0;
+}
+
+/* Le pied ne colle au bas que dans un conteneur qui DÉFILE — les grilles.
+   Ailleurs (tiroir de fiche, tables de synthèse), le conteneur de défilement le
+   plus proche est la page entière : le pied se serait alors ancré au bas de la
+   fenêtre et remonté au-dessus de ses propres lignes tant que la table n'était
+   pas entièrement visible. */
+.grille__defilement .tableau__pied td {
   position: sticky;
   bottom: 0;
   z-index: 1;
-  background: var(--fond-carte);
-  border-top: 2px solid var(--bordure);
 }
 
 /* --- Tableau croisé de la vue synthétique -------------------------------- */

@@ -30,7 +30,16 @@ import {
 const MARGES = { haut: 10, droite: 8, bas: 22, gauche: 54 }
 const HAUTEUR_VOLUME = 150
 const HAUTEUR_IMPACT = 96
-const INTERSTICE = 26
+/**
+ * Espace entre le panneau des quantités et celui des euros.
+ *
+ * Il ne s'agit pas d'aération décorative : les deux panneaux portent des unités
+ * différentes, et c'est le blanc qui le signale. Trop serrés, ils se lisent
+ * comme un seul graphique à double axe — précisément la lecture erronée que
+ * l'empilement cherche à éviter. L'étiquette d'unité du panneau bas (« € »)
+ * vient de surcroît se loger dans cet interstice.
+ */
+const INTERSTICE = 40
 
 export function TendanceHebdo({
   semaines,
@@ -47,10 +56,15 @@ export function TendanceHebdo({
   const largeurTrace = Math.max(largeur - MARGES.gauche - MARGES.droite, 80)
 
   const echelles = useMemo(() => {
-    const maxVolume = Math.max(
+    const sommet = Math.max(
       1,
       ...semaines.map((s) => Math.max(Number(s.conso_theorique), Number(s.conso_reelle))),
     )
+    // L'échelle suit le domaine des GRADUATIONS, pas la valeur maximale brute :
+    // sinon la dernière graduation, arrondie au-dessus, se dessinerait hors du
+    // panneau.
+    const ticksVolume = graduations(0, sommet, 3)
+    const maxVolume = Math.max(sommet, ...ticksVolume)
     const impacts = semaines.map((s) => Number(s.ecart_valorise))
     const ticksImpact = graduations(Math.min(0, ...impacts), Math.max(0, ...impacts), 3)
     const minImpact = Math.min(...ticksImpact)
@@ -65,7 +79,7 @@ export function TendanceHebdo({
 
     return {
       maxVolume,
-      ticksVolume: graduations(0, maxVolume, 3),
+      ticksVolume,
       ticksImpact,
       yVolume,
       yImpact,

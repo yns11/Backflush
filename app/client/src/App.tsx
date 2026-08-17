@@ -14,9 +14,12 @@ import { Assistant } from '@/components/Assistant'
 import { BandeauQualite } from '@/components/BandeauQualite'
 import { BarreFiltres } from '@/components/BarreFiltres'
 import { EtatErreur } from '@/components/Etats'
+import { BlocRepliable } from '@/components/Repliable'
 import { SlicerTemporel } from '@/components/SlicerTemporel'
 import { TiroirFiche } from '@/components/TiroirFiche'
+import { BaseArticle } from '@/pages/BaseArticle'
 import { PageGrille } from '@/pages/Grilles'
+import { Nomenclature } from '@/pages/Nomenclature'
 import { PerimetreSynthetique } from '@/pages/PerimetreSynthetique'
 import { Synthese } from '@/pages/Synthese'
 import { FiltresProvider, useFiltres } from '@/state/filtres'
@@ -85,20 +88,45 @@ function Coquille({ optionsChargement }: { optionsChargement: boolean }) {
     aller('assistant')
   }, [aller])
 
+  // Les écrans de paramétrage portent sur le référentiel, pas sur une période :
+  // leur imposer les filtres transverses et le slicer n'aurait aucun sens.
+  const ecranReferentiel = page === 'articles' || page === 'nomenclature'
+
   return (
     <div className="coquille">
       <Entete />
       <main className="contenu">
         <BandeauQualite />
-        <BarreFiltres options={options.data} />
 
-        {page !== 'assistant' && (
-          <SlicerTemporel
-            semaines={chronologie.data?.semaines ?? []}
-            dateDebut={filtres.date_debut}
-            dateFin={filtres.date_fin}
-            onChangement={(debut, fin) => modifier({ date_debut: debut, date_fin: fin })}
-          />
+        {!ecranReferentiel && (
+          <>
+            <BlocRepliable
+              cle="filtres"
+              titre="Filtres"
+              resume={<ResumeFiltres />}
+            >
+              <BarreFiltres options={options.data} />
+            </BlocRepliable>
+
+            {page !== 'assistant' && (
+              <BlocRepliable
+                cle="periode"
+                titre="Période"
+                resume={
+                  filtres.date_debut && filtres.date_fin
+                    ? `${filtres.date_debut} → ${filtres.date_fin}`
+                    : "tout l'historique"
+                }
+              >
+                <SlicerTemporel
+                  semaines={chronologie.data?.semaines ?? []}
+                  dateDebut={filtres.date_debut}
+                  dateFin={filtres.date_fin}
+                  onChangement={(debut, fin) => modifier({ date_debut: debut, date_fin: fin })}
+                />
+              </BlocRepliable>
+            )}
+          </>
         )}
 
         {page === 'synthese' && <Synthese />}
@@ -106,6 +134,8 @@ function Coquille({ optionsChargement }: { optionsChargement: boolean }) {
         {page === 'perimetres' && <VuePerimetres onAnalyseIA={surAnalyseIA} />}
         {page === 'references' && <PageGrille cle="composants" onAnalyseIA={surAnalyseIA} />}
         {page === 'detail' && <PageGrille cle="details" onAnalyseIA={surAnalyseIA} />}
+        {page === 'articles' && <BaseArticle />}
+        {page === 'nomenclature' && <Nomenclature />}
         {page === 'assistant' && (
           <Assistant
             filtres={filtres}
@@ -142,6 +172,33 @@ function Coquille({ optionsChargement }: { optionsChargement: boolean }) {
 }
 
 /**
+ * Résumé de la sélection, affiché quand le bloc de filtres est replié.
+ *
+ * Un bloc fermé qui ne dit rien de ce qu'il cache oblige à le rouvrir pour
+ * vérifier qu'aucun filtre oublié ne fausse la lecture — ce qui annule le
+ * bénéfice du pliage.
+ */
+function ResumeFiltres() {
+  const { filtres } = useFiltres()
+  const parts: string[] = []
+  const ajouter = (libelle: string, valeurs: string[]) => {
+    if (valeurs.length === 1) parts.push(`${libelle} : ${valeurs[0]}`)
+    else if (valeurs.length > 1) parts.push(`${valeurs.length} ${libelle.toLowerCase()}s`)
+  }
+  ajouter('Programme', filtres.programmes)
+  ajouter('Périmètre', filtres.perimetres)
+  ajouter('Catégorie', filtres.categories)
+  ajouter('Parent', filtres.parents)
+  ajouter('Composant', filtres.composants)
+  if (filtres.recherche) parts.push(`recherche « ${filtres.recherche} »`)
+  if (filtres.exclure_conforme) parts.push('conformes exclues')
+  if (filtres.coef_uniforme_uniquement) parts.push('coef. uniforme seulement')
+  if (filtres.impact_min) parts.push(`impact ≥ ${filtres.impact_min} €`)
+
+  return <>{parts.length === 0 ? 'aucun filtre actif' : parts.join(' · ')}</>
+}
+
+/**
  * Écran « Périmètres » : la grille hebdomadaire, ou la vue synthétique.
  *
  * La vue synthétique n'est pas un autre écran mais une autre LECTURE des mêmes
@@ -155,7 +212,7 @@ function VuePerimetres({
   onAnalyseIA: (question: string, reponse: ReponseAssistant) => void
 }) {
   const { filtres } = useFiltres()
-  const [synthetique, setSynthetique] = useState(false)
+  const { synthetique, definirSynthetique } = useNavigation()
   const perimetreUnique = filtres.perimetres.length === 1
 
   return (
@@ -172,7 +229,7 @@ function VuePerimetres({
           <input
             type="checkbox"
             checked={synthetique}
-            onChange={(evenement) => setSynthetique(evenement.target.checked)}
+            onChange={(evenement) => definirSynthetique(evenement.target.checked)}
           />
           Vue synthétique
           {!perimetreUnique && synthetique && ' — périmètre unique requis'}
@@ -194,9 +251,13 @@ function Entete({ themeSeulement = false }: { themeSeulement?: boolean }) {
   return (
     <header className="entete">
       <div className="entete__marque">
-        <span className="entete__logo" aria-hidden="true">
-          B
-        </span>
+        {/* Deux images plutôt qu'une seule commutée en JavaScript : le thème
+            « système » n'est pas connu du composant (aucun attribut n'est posé
+            sur la racine), c'est la requête média qui tranche. La bascule est
+            donc faite en CSS, avec exactement la même logique à trois états que
+            les jetons de couleur. */}
+        <img src="/logo.png" alt="eMotors" className="entete__logo entete__logo--clair" />
+        <img src="/logo-sombre.png" alt="eMotors" className="entete__logo entete__logo--sombre" />
         <span>
           Backflush Analytics
           <div className="entete__sous-titre">Écarts de consommation composant</div>

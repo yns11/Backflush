@@ -87,8 +87,10 @@ from src.jobs.lakebase_schema import (  # noqa: E402 — l'amorce doit précéde
     META_INGESTION,
     SCHEMA,
     TABLES,
+    TABLES_PARAM,
     Table,
     create_indexes_sql,
+    create_param_table_sql,
     create_table_sql,
 )
 from src.jobs.sqlutil import validate_identifier  # noqa: E402
@@ -449,6 +451,40 @@ def ensure_meta_table(conn: psycopg.Connection, pg_schema: str) -> None:
     conn.commit()
 
 
+def ensure_param_tables(
+    conn: psycopg.Connection, pg_schema: str, roles: Sequence[str]
+) -> None:
+    """Crée les tables de paramétrage si elles manquent, et y ouvre l'écriture.
+
+    Ces tables sont d'une autre nature que les tables publiées : elles portent
+    les arbitrages saisis dans l'application (références exclues, lignes de
+    nomenclature désactivées ou corrigées), qu'aucune source ne pourrait
+    reconstruire. Elles échappent donc à la bascule DROP + RENAME — sans quoi
+    chaque exécution nocturne les viderait — et sont créées en
+    ``IF NOT EXISTS``.
+
+    Ce sont AUSSI les seules tables sur lesquelles le principal de service reçoit
+    des droits d'écriture. Le périmètre du GRANT est la vraie barrière : le
+    verrou de lecture seule côté application peut être contourné par une
+    régression de code, pas celui-ci.
+    """
+    with conn.cursor() as cur:
+        for table in TABLES_PARAM:
+            cur.execute(create_param_table_sql(table, schema=pg_schema))
+            for role in roles:
+                cur.execute(
+                    pgsql.SQL("GRANT SELECT, INSERT, UPDATE, DELETE ON {}.{} TO {}").format(
+                        pgsql.Identifier(pg_schema), pgsql.Identifier(table.name),
+                        pgsql.Identifier(role),
+                    )
+                )
+    conn.commit()
+    LOGGER.info(
+        "Tables de paramétrage prêtes (%s) — écriture accordée à %d rôle(s).",
+        ", ".join(table.name for table in TABLES_PARAM), len(roles),
+    )
+
+
 def record_ingestion(
     conn: psycopg.Connection,
     pg_schema: str,
@@ -561,6 +597,7 @@ def run(spark, args: argparse.Namespace) -> dict[str, int]:
     results: dict[str, int] = {}
     with connect(args) as conn:
         ensure_meta_table(conn, pg_schema)
+        ensure_param_tables(conn, pg_schema, roles)
         allow_gin = ensure_extensions(conn)
         for table in tables:
             started_at = datetime.now(UTC)

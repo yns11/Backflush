@@ -13,6 +13,7 @@ from fastapi import Depends, Request
 
 from app.server.core.config import Settings, get_settings
 from app.server.core.lakebase import LakebasePool
+from app.server.data.parametrage import DepotParametrage
 from app.server.data.repository import Repository
 from app.server.services.assistant import AssistantService
 
@@ -23,6 +24,10 @@ def get_pool(request: Request) -> LakebasePool:
 
 def get_repository(request: Request) -> Repository:
     return request.app.state.repository
+
+
+def get_parametrage(request: Request) -> DepotParametrage:
+    return request.app.state.parametrage
 
 
 def get_assistant(request: Request) -> AssistantService:
@@ -47,5 +52,6 @@ def get_utilisateur(request: Request) -> dict[str, str | None]:
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 PoolDep = Annotated[LakebasePool, Depends(get_pool)]
 RepositoryDep = Annotated[Repository, Depends(get_repository)]
+ParametrageDep = Annotated[DepotParametrage, Depends(get_parametrage)]
 AssistantDep = Annotated[AssistantService, Depends(get_assistant)]
 UtilisateurDep = Annotated[dict, Depends(get_utilisateur)]

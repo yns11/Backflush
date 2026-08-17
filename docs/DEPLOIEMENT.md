@@ -358,6 +358,30 @@ ont trois principaux de service distincts.
 > la main tant que la variable n'est pas renseignée, **et à refaire après chaque
 > exécution du job**, puisque la bascule recrée les tables.
 
+### Les tables de paramétrage sont les seules ouvertes en écriture
+
+Les écrans « Base article » et « Nomenclature » écrivent dans deux tables que
+l'ingestion ne remplace jamais : `param_article_exclu` et `param_nomenclature`.
+Le job les crée en `IF NOT EXISTS` et leur accorde `SELECT, INSERT, UPDATE,
+DELETE` — c'est le seul endroit où le principal de service peut écrire.
+
+```sql
+-- Contrôle : le principal ne doit avoir que SELECT hors des tables param_*.
+SELECT table_name, string_agg(privilege_type, ', ' ORDER BY privilege_type) AS droits
+FROM information_schema.role_table_grants
+WHERE table_schema = 'backflush' AND grantee = '<client_id>'
+GROUP BY table_name ORDER BY table_name;
+```
+
+Le verrou applicatif (`default_transaction_read_only` sur chaque connexion) et
+ce périmètre de `GRANT` se doublent volontairement : le premier protège d'une
+régression de code, le second en est indépendant.
+
+> Ces tables **survivent aux exécutions du job** : c'est voulu, elles portent des
+> décisions saisies à la main qu'aucune source ne pourrait reconstruire. Elles
+> sont aussi les seules à sauvegarder si l'on migre d'instance Lakebase — tout
+> le reste se régénère par un `bundle run`.
+
 ### Renseigner la variable ne nécessite pas de relancer le pipeline
 
 Le `GRANT SELECT ON ALL TABLES` ci-dessus couvre les tables **déjà publiées** :
@@ -439,6 +463,9 @@ Puis, sur l'URL de l'application :
 | Assistant en `503` | Ressource `serving-endpoint` absente, ou principal de service sans `CAN_QUERY` | Attacher la ressource, accorder le droit |
 | Job en échec sur `article_hors_referentiel` | Des composants mouvementés manquent dans `silver_base_article` | Corriger la source ; en dernier recours, `--no-fail-on-dq-error` pour débloquer, en sachant que les chiffres sont incomplets |
 | `relation "dim_coef_perimetre" does not exist`, ou colonne `parent_perimetre` inconnue | Le bundle a été déployé sans relancer le pipeline après la montée de version du modèle | `databricks bundle run backflush_pipeline` (§4) |
+| `relation "param_article_exclu" does not exist` sur les écrans de paramétrage | Le pipeline n'a pas été relancé depuis l'ajout de ces écrans : c'est lui qui crée les tables | `databricks bundle run backflush_pipeline` (§4) |
+| `permission denied for table param_nomenclature` à l'enregistrement d'une correction | Les tables de paramétrage existent mais le `GRANT` d'écriture n'a pas été rejoué (`app_service_principal` vide au moment de l'exécution) | Renseigner la variable, redéployer, relancer le job — ou accorder `INSERT, UPDATE, DELETE` à la main (§5) |
+| Les chiffres ne correspondent plus à ceux de Power BI | Un paramétrage est en vigueur : des références sont exclues ou des coefficients corrigés | `GET /api/parametrage/resume` en donne le décompte ; le détail est dans les écrans « Base article » et « Nomenclature » |
 | Tous les périmètres valent `NON RENSEIGNE` | `produits_fabriques.ligne_de_prod` vide, ou `ref_parent` ne correspond pas aux `item_id` des parents | Vérifier la source ; le contrôle `parent_sans_perimetre` de `dq_controles` le quantifie |
 | Le job gold échoue sur une colonne absente de `produits_fabriques` | Le contrat de colonnes attendu (`src/jobs/build_gold.py`, `COLONNES_SOURCE`) n'est pas satisfait | Aligner la source ou le contrat — l'échec au démarrage est délibéré, il vaut mieux qu'un modèle silencieusement faux |
 
@@ -460,3 +487,8 @@ Points de contrôle avant ouverture aux utilisateurs :
 - [ ] `dq_controles` sans anomalie de sévérité `ERREUR`
 - [ ] Comparaison d'un total avec la source ERP sur une semaine témoin
 - [ ] Permissions de l'application accordées au groupe d'utilisateurs cible
+- [ ] `GET /api/parametrage/resume` renvoie trois zéros — aucun arbitrage hérité
+      d'une mise au point ne doit partir en production à l'insu de tous
+- [ ] Écriture vérifiée : exclure puis réintégrer une référence de test depuis
+      l'écran « Base article ». Un `permission denied` ici signale un `GRANT`
+      incomplet sur les tables `param_*` (§5)

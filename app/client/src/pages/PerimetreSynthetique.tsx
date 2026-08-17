@@ -24,7 +24,11 @@ import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 
 import { api, telechargerSynthese } from '@/api/client'
-import type { LigneEcartSynthese, LigneProductionSynthese } from '@/api/types'
+import type {
+  LigneEcartSynthese,
+  LigneProductionSynthese,
+  SemaineCalendrier,
+} from '@/api/types'
 import { EtatErreur, EtatVide, Squelette } from '@/components/Etats'
 import { euro, nombre } from '@/lib/format'
 import { useFiltres } from '@/state/filtres'
@@ -53,7 +57,12 @@ export function PerimetreSynthetique() {
 
   const modele = useMemo(() => {
     if (!requete.data) return null
-    return construireModele(requete.data.production, requete.data.ecarts, enValeur)
+    return construireModele(
+      requete.data.production,
+      requete.data.ecarts,
+      enValeur,
+      requete.data.semaines,
+    )
   }, [requete.data, enValeur])
 
   if (!perimetre) {
@@ -257,6 +266,7 @@ function construireModele(
   production: LigneProductionSynthese[],
   ecarts: LigneEcartSynthese[],
   enValeur: boolean,
+  calendrier: SemaineCalendrier[],
 ) {
   const semaines = new Map<string, Semaine>()
   const ajouterSemaine = (annee: number, numero: number) => {
@@ -264,6 +274,10 @@ function construireModele(
     semaines.set(semaine.cle, semaine)
     return semaine.cle
   }
+  // Les colonnes viennent du calendrier de la période, pas des seules lignes
+  // rapportées : une semaine d'arrêt de ligne doit apparaître, vide. Un axe qui
+  // saute de S25 à S27 se lit comme une suite continue et efface l'arrêt.
+  for (const semaine of calendrier) ajouterSemaine(semaine.annee, semaine.semaine)
 
   const parents = new Map<string, LigneModele>()
   const totalProduction: Record<string, number> = {}

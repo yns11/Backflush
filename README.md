@@ -24,12 +24,16 @@ Dynamics 365 F&O → Lakehouse → Lakebase → App).
 | **Périmètres** | Grille agrégée par ligne de production × semaine, et **vue synthétique** en tableau croisé (production par parent, écart par composant en équivalent produit) |
 | **Références** | Grille agrégée par composant (écart cumulé, éq. produit, impact €, coef BOM, uniformité), recherche plein texte |
 | **Détail** | Grille ligne à ligne `parent × composant × semaine` — la granularité d'audit |
+| **Base article** | Référentiel article : **exclure** des références de l'analyse, à la ligne ou par lot, avec motif et auteur. L'impact porté par chaque référence est affiché en face du bouton |
+| **Nomenclature** | Nomenclature active : **désactiver** une ligne ou **corriger** son coefficient. Le coefficient de l'ERP reste affiché à côté du coefficient retenu |
 | **Assistant IA** | Chat outillé (function calling) sur production, consommation, écarts, base article et nomenclature |
 
 Transverse à tous les écrans :
 
 - **Bascule valeur / quantité** — un seul bouton fait basculer indicateurs, graphiques, classements et vue synthétique entre l'euro et l'unité. Ce n'est pas un formatage : le tri suit la bascule côté serveur, sans quoi on lirait un classement en euros habillé d'unités.
-- **Timeline slicer** — brosse hebdomadaire sur l'histogramme des écarts valorisés, presets (4/8/13/26/52 semaines, YTD, tout), navigation clavier.
+- **Blocs repliables** — filtres, période, indicateurs, graphiques et grilles se replient d'un clic ; l'état est mémorisé, et un bloc fermé résume ce qu'il cache.
+- **Timeline slicer** — une case par semaine ISO, brossage, presets (4/8/13/26/52 semaines, YTD, tout), navigation clavier. La période annoncée se termine au **dimanche** de la dernière semaine retenue.
+- **Axe temporel continu** — une semaine sans production reste une colonne vide plutôt que de disparaître : un arrêt de ligne ne doit pas se lire comme une semaine ordinaire.
 - **Grilles serveur** — tri, pagination, filtres, sélection multiple, **pied de totaux** (calculés sur la sélection entière, pas sur la page), **copie presse-papiers** (TSV, collable dans Excel), **export XLSX**, **analyse IA du lot sélectionné**.
 - **Points de vigilance cliquables** — chaque contrôle qualité du bandeau ouvre les lignes qu'il dénonce, filtres déjà appliqués.
 - **Thème clair / sombre** avec palette de data-visualisation validée (voir §6).
@@ -85,9 +89,13 @@ Les 20 axes d'amélioration priorisés sont dans [`docs/AMELIORATIONS.md`](docs/
 │   │   ├── core/                  config, pool Lakebase, erreurs, journalisation
 │   │   ├── domain/                modèles Pydantic + règles métier pures (testables)
 │   │   ├── data/                  repository SQL (le seul endroit qui écrit du SQL)
+│   │   │                          dont faits.py — surcharges du key-user appliquées
+│   │   │                          à la lecture, et parametrage.py — seul module écrivant
 │   │   ├── services/              KPI, export XLSX, assistant IA
 │   │   └── api/                   routeurs HTTP (aucune logique métier)
 │   └── client/                    Frontend React 19 + TypeScript + Vite
+├── logo.svg · logo-sombre.png     Logos eMotors d'origine (scripts/preparer_logos.py
+│                                  en dérive les versions web d'app/client/public)
 └── tests/                         Tests unitaires backend (pytest)
 ```
 

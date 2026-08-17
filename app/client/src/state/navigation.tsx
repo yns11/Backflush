@@ -23,6 +23,8 @@ export const PAGES = {
   perimetres: 'Périmètres',
   references: 'Références',
   detail: 'Détail',
+  articles: 'Base article',
+  nomenclature: 'Nomenclature',
   assistant: 'Assistant IA',
 } as const
 
@@ -36,10 +38,25 @@ export type Fiche =
 
 interface ContexteNavigation {
   page: Page
-  aller: (page: Page) => void
+  aller: (page: Page, options?: OptionsNavigation) => void
   fiche: Fiche
   ouvrirFiche: (fiche: NonNullable<Fiche>) => void
   fermerFiche: () => void
+  /**
+   * Vue synthétique active sur l'écran « Périmètres ».
+   *
+   * L'état vit ici et non dans l'écran, parce qu'on y arrive aussi depuis
+   * AILLEURS : un clic sur la colonne « Périmètre » d'une grille doit ouvrir
+   * directement le tableau croisé. Un état local à l'écran serait réinitialisé
+   * à chaque montage, et le clic retomberait sur la grille hebdomadaire.
+   */
+  synthetique: boolean
+  definirSynthetique: (actif: boolean) => void
+}
+
+export interface OptionsNavigation {
+  /** Force le mode de la vue « Périmètres » à l'arrivée. */
+  synthetique?: boolean
 }
 
 const Contexte = createContext<ContexteNavigation | null>(null)
@@ -54,6 +71,7 @@ export function NavigationProvider({ children }: { children: ReactNode }) {
     typeof window === 'undefined' ? 'synthese' : pageDepuisChemin(window.location.pathname),
   )
   const [fiche, setFiche] = useState<Fiche>(null)
+  const [synthetique, setSynthetique] = useState(false)
 
   // Prise en charge des boutons Précédent / Suivant du navigateur.
   useEffect(() => {
@@ -62,9 +80,10 @@ export function NavigationProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener('popstate', surRetour)
   }, [])
 
-  const aller = useCallback((cible: Page) => {
+  const aller = useCallback((cible: Page, options?: OptionsNavigation) => {
     setPage(cible)
     setFiche(null)
+    if (options?.synthetique !== undefined) setSynthetique(options.synthetique)
     // Les paramètres de filtre sont conservés : changer d'écran ne change pas
     // le périmètre analysé.
     window.history.pushState(null, '', `/${cible}${window.location.search}`)
@@ -74,8 +93,11 @@ export function NavigationProvider({ children }: { children: ReactNode }) {
   const fermerFiche = useCallback(() => setFiche(null), [])
 
   const valeur = useMemo(
-    () => ({ page, aller, fiche, ouvrirFiche, fermerFiche }),
-    [page, aller, fiche, ouvrirFiche, fermerFiche],
+    () => ({
+      page, aller, fiche, ouvrirFiche, fermerFiche,
+      synthetique, definirSynthetique: setSynthetique,
+    }),
+    [page, aller, fiche, ouvrirFiche, fermerFiche, synthetique],
   )
 
   return <Contexte.Provider value={valeur}>{children}</Contexte.Provider>

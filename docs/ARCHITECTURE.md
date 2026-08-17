@@ -137,7 +137,49 @@ Les articles sans ligne de production renseignée sont regroupés sous
 `NON RENSEIGNE` plutôt qu'écartés : une donnée source incomplète doit rester
 visible, sans quoi les totaux ne se réconcilient plus.
 
-### 2.7 Réconciliation complète (`FULL OUTER JOIN`)
+### 2.7 Le paramétrage du key-user s'applique à la LECTURE
+
+Deux arbitrages sont laissés au key-user : **exclure une référence** de l'analyse
+(consommable, article de transit, référence de test) et **désactiver ou corriger
+une ligne de nomenclature** (nomenclature obsolète, substitution non tracée).
+Ils vivent dans deux tables `param_*` que l'ingestion ne touche jamais.
+
+Deux façons de les appliquer, et le choix a des conséquences :
+
+| | Recalcul du modèle | **Application à la lecture** (retenu) |
+|---|---|---|
+| Délai de prise d'effet | La prochaine exécution du job | Immédiat |
+| Réversibilité | Une exécution de plus | Un clic |
+| Coût par requête | Nul | Une jointure sur deux petites tables |
+| Risque | Arbitrage figé entre deux nuits | Divergence si les formules gold changent |
+
+`data/faits.py` substitue au nom de la table de détail une **table dérivée** qui
+joint le paramétrage et recalcule les colonnes concernées. Le reste du dépôt
+continue d'écrire `FROM {FACT} f` sans rien savoir du mécanisme, et les
+arbitrages atteignent donc aussi bien les indicateurs que l'export ou
+l'assistant.
+
+Le recalcul est exact, non approché : le modèle gold pose
+`conso_theorique = qty_parent_produite × coef_bom` puis en dérive l'écart, sa
+valorisation et l'équivalent produit. Substituer le coefficient et rejouer ces
+formules redonne ce qu'aurait produit un recalcul complet. **C'est le point de
+fragilité de ce choix** : toute évolution de ces formules côté gold doit être
+répercutée dans `faits.py`, et `tests/test_faits.py` compare les deux.
+
+Deux garde-fous complètent le dispositif :
+
+- **Écriture bornée.** Le pool ouvre chaque connexion en
+  `default_transaction_read_only` ; `connexion_ecriture()` lève ce verrou pour
+  une transaction, et une seule. Les droits Postgres sont la barrière ultime :
+  le principal de service ne reçoit `INSERT`/`UPDATE`/`DELETE` que sur les deux
+  tables `param_*`.
+- **Performance vérifiée.** La table dérivée n'est qu'une projection au-dessus
+  d'une jointure : PostgreSQL la remonte dans la requête appelante, et les index
+  de `fact_ecart_backflush` continuent de servir. Un test exécute un `EXPLAIN`
+  et échoue si le balayage séquentiel revient — une régression se manifesterait
+  sinon par une application lente, symptôme qui n'accuse jamais la bonne cause.
+
+### 2.8 Réconciliation complète (`FULL OUTER JOIN`)
 
 Le fait principal réconcilie l'attendu (production × nomenclature) et le réel
 (sorties de stock) par une **jointure complète**. Une jointure interne masquerait
@@ -149,7 +191,7 @@ les deux anomalies les plus coûteuses :
 | `Hors nomenclature` | Composant sorti sans ligne BOM | Erreur de saisie d'OF, nomenclature obsolète, substitution non tracée |
 | `Sans consommation` | Ligne BOM sans aucune sortie de la semaine | Backflush non exécuté, OF non clôturé |
 
-### 2.8 Performance
+### 2.9 Performance
 
 | Mécanisme | Effet |
 |---|---|
@@ -161,7 +203,7 @@ les deux anomalies les plus coûteuses :
 | `ANALYZE` avant la bascule | La première requête après ingestion planifie sur des statistiques fraîches |
 | Compression gzip des réponses | Une page de 500 lignes passe d'environ 400 ko à 80 ko |
 
-### 2.9 Chargement des `numeric` en flottant
+### 2.10 Chargement des `numeric` en flottant
 
 `psycopg.adapters.register_loader("numeric", FloatLoader)` — sérialisé en JSON,
 un `Decimal` devient une **chaîne**, que le frontend doit reconvertir à chaque

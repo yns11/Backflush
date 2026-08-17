@@ -23,8 +23,8 @@ export function PageGrille({
   cle: CleGrille
   onAnalyseIA: (question: string, reponse: ReponseAssistant) => void
 }) {
-  const { filtres } = useFiltres()
-  const { ouvrirFiche } = useNavigation()
+  const { filtres, modifier } = useFiltres()
+  const { ouvrirFiche, aller } = useNavigation()
   const [erreurIA, setErreurIA] = useState<string | null>(null)
 
   const definitions = useQuery({ queryKey: ['grilles'], queryFn: api.grilles })
@@ -68,6 +68,17 @@ export function PageGrille({
         grille={grille}
         filtres={filtres}
         onOuvrirFiche={(genre, identifiant) => ouvrirFiche({ genre, id: identifiant })}
+        // Sur la grille des périmètres, la colonne ne mène nulle part : on y est.
+        onOuvrirPerimetre={
+          cle === 'perimetres'
+            ? undefined
+            : (perimetre) => {
+                // Sélection REMPLACÉE, pas complétée : la vue synthétique porte
+                // sur un périmètre unique. Le reste des filtres est conservé.
+                modifier({ perimetres: [perimetre] })
+                aller('perimetres', { synthetique: true })
+              }
+        }
         actions={[
           {
             libelle: analyse.isPending ? 'Analyse en cours…' : 'Analyse IA',

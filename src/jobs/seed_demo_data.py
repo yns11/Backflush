@@ -37,7 +37,9 @@ from src.jobs.lakebase_schema import (
     SCHEMA,
     TABLES,
     TABLES_BY_NAME,
+    TABLES_PARAM,
     create_indexes_sql,
+    create_param_table_sql,
     create_schema_sql,
     create_table_sql,
 )
@@ -460,6 +462,14 @@ def write(conn: psycopg.Connection, dataset: dict[str, list[tuple[Any, ...]]], p
             )
             cur.execute(create_table_sql(table, schema=pg_schema))
         conn.commit()
+
+    # Les tables de paramétrage sont créées mais JAMAIS vidées : elles portent
+    # des arbitrages saisis à la main, que ce script n'a aucun moyen de
+    # reproduire. C'est le même contrat qu'en production.
+    with conn.cursor() as cur:
+        for table in TABLES_PARAM:
+            cur.execute(create_param_table_sql(table, schema=pg_schema))
+    conn.commit()
 
     now = datetime.now(UTC)
     for table in TABLES:

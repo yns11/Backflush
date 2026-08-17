@@ -92,6 +92,7 @@ def croiser(
     ecarts: Iterable[Mapping[str, Any]],
     *,
     en_valeur: bool,
+    calendrier: Iterable[Mapping[str, Any]] | None = None,
 ) -> SyntheseCroisee:
     """Croise les lignes longues du dépôt en un tableau référence × semaine.
 
@@ -99,8 +100,16 @@ def croiser(
         montants ; en quantité, la production est en pièces fabriquées et
         l'écart en **équivalent produit** — la seule grandeur qui se compare au
         volume produit affiché au-dessus.
+    :param calendrier: semaines de la période, y compris celles sans mouvement.
+        Sans lui, les colonnes seraient déduites des seules lignes rapportées et
+        l'axe sauterait les semaines d'arrêt de ligne — « S24, S25, S27 » se lit
+        comme une suite continue et efface l'interruption, qui est pourtant
+        souvent l'information la plus utile du tableau.
     """
     semaines: dict[str, Semaine] = {}
+    for ligne in calendrier or ():
+        semaine = Semaine.depuis(ligne.get("annee"), ligne.get("semaine"))
+        semaines.setdefault(semaine.cle, semaine)
 
     def colonne(ligne: Mapping[str, Any]) -> str:
         semaine = Semaine.depuis(ligne.get("annee"), ligne.get("semaine"))

@@ -15,6 +15,7 @@ Règles tenues ici :
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Iterator
 from datetime import date
 from typing import Any
@@ -23,13 +24,22 @@ from psycopg.rows import dict_row
 
 from app.server.core.errors import RequeteInvalideError
 from app.server.core.lakebase import LakebasePool
+from app.server.data.faits import SOURCE_FAITS
+from app.server.data.faits import TABLE_ARTICLE_EXCLU as PARAM_EXCLUSION
+from app.server.data.faits import TABLE_DETAIL as FACT_DETAIL
+from app.server.data.faits import TABLE_NOMENCLATURE_PARAM as PARAM_NOMENCLATURE
 from app.server.domain.dictionary import GRILLES
 from app.server.domain.filters import Filtres, construire_predicat, expression_type_ecart
 from app.server.domain.metrics import AgregatBrut
 
 LOGGER = logging.getLogger("backflush.repository")
 
-FACT = "fact_ecart_backflush"
+#: Source des faits. Ce n'est PAS le nom de la table de détail mais une table
+#: dérivée qui applique le paramétrage du key-user (références exclues, lignes
+#: de nomenclature désactivées ou corrigées) — voir ``data/faits.py``. Toutes
+#: les requêtes analytiques écrivent ``FROM {FACT} f`` et bénéficient donc des
+#: arbitrages sans avoir à les connaître.
+FACT = SOURCE_FAITS
 
 #: Bloc de mesures partagé par tous les agrégats. ``f`` est l'alias de la table
 #: de détail. Chaque mesure est protégée par COALESCE : une sélection vide doit
@@ -60,9 +70,62 @@ MESURES = """\
     COALESCE(SUM(abs(f.ecart_brut)), 0)                         AS ecart_absolu,
     COALESCE(SUM(f.ecart_equivalent_produit), 0)                AS ecart_equivalent_produit"""
 
+#: Noms des colonnes produites par :data:`MESURES`, extraits du bloc lui-même.
+#:
+#: Les recopier à la main aurait garanti l'oubli : une mesure ajoutée plus haut
+#: aurait disparu des séries hebdomadaires sans erreur, laissant un ``null`` à
+#: l'écran. Les lignes de commentaire sont retirées d'abord, sans quoi un
+#: « ... AS ... » rédigé en français serait pris pour un alias.
+_MESURES_NOMS: tuple[str, ...] = tuple(
+    re.findall(
+        r"\bAS\s+(\w+)",
+        "\n".join(
+            ligne for ligne in MESURES.splitlines() if not ligne.lstrip().startswith("--")
+        ),
+    )
+)
+
 #: Libellé de semaine ISO lisible (2026-S14), calculé en base pour rester
 #: cohérent entre la grille, l'export et l'assistant.
 SEMAINE_LIBELLE = "f.annee::text || '-S' || lpad(f.semaine::text, 2, '0')"
+
+#: Calendrier CONTINU des semaines de la sélection.
+#:
+#: Attend une CTE ``mesures`` exposant ``semaine_debut`` pour la sélection
+#: courante, et fournit une CTE ``calendrier`` d'une ligne par lundi.
+#:
+#: Trois règles, qui sont trois pièges évités :
+#:
+#: 1. **Une semaine sans mouvement produit une ligne**, sinon l'axe affiche
+#:    « S24, S25, S27 » et l'arrêt de ligne de la S26 devient invisible — alors
+#:    que c'est souvent l'information la plus utile de la série.
+#: 2. **Les bornes sont bridées par l'étendue réelle des données.** Une sélection
+#:    « 2026 → 2030 » sur un historique de vingt semaines produirait sinon 260
+#:    colonnes vides. L'étendue est lue sur la table de détail brute : les
+#:    semaines qui existent ne dépendent pas des références exclues.
+#: 3. **Une sélection sans aucune ligne ne produit AUCUNE semaine.** Vingt
+#:    semaines de zéros pour une référence inexistante ne renseignent sur rien ;
+#:    c'est un état vide, et il doit se présenter comme tel.
+_CALENDRIER = f"""etendue AS (
+                SELECT MIN(semaine_debut) AS mini, MAX(semaine_debut) AS maxi
+                FROM {FACT_DETAIL}
+            ),
+            bornes AS (
+                SELECT GREATEST(
+                           date_trunc('week', COALESCE(%(date_debut)s::date, e.mini))::date, e.mini
+                       ) AS depart,
+                       LEAST(
+                           date_trunc('week', COALESCE(%(date_fin)s::date, e.maxi))::date, e.maxi
+                       ) AS arrivee
+                FROM etendue e
+                WHERE EXISTS (SELECT 1 FROM mesures)
+            ),
+            calendrier AS (
+                SELECT jour::date AS semaine_debut
+                FROM bornes,
+                     generate_series(bornes.depart, bornes.arrivee, interval '7 days') AS jour
+                WHERE bornes.depart IS NOT NULL
+            )"""
 
 #: Expression d'impact selon la mesure choisie par l'utilisateur.
 #:
@@ -280,20 +343,62 @@ class Repository:
         return AgregatBrut.depuis_ligne(self._fetch_one(sql, predicat.params))
 
     def serie_hebdomadaire(self, filtres: Filtres) -> list[dict[str, Any]]:
-        """Une ligne par semaine — alimente la tendance et l'histogramme du slicer."""
+        """Une ligne par semaine — alimente la tendance et la piste du slicer.
+
+        L'axe est **continu** : une semaine sans mouvement produit une ligne à
+        zéro plutôt que d'être omise. Sans cela, l'axe affichait
+        « S24, S25, S27, S28 » et une interruption de production se lisait comme
+        une semaine ordinaire — l'absence devenait invisible, alors que c'est
+        souvent le fait le plus intéressant de la série.
+        """
         predicat = construire_predicat(filtres)
         sql = f"""
-            SELECT f.semaine_debut,
-                   f.annee,
-                   f.semaine,
-                   {SEMAINE_LIBELLE} AS semaine_libelle,
-                   {MESURES.format(type_expr=expression_type_ecart())}
-            FROM {FACT} f
-            WHERE {predicat.sql}
-            GROUP BY f.semaine_debut, f.annee, f.semaine
-            ORDER BY f.semaine_debut
+            WITH mesures AS (
+                SELECT f.semaine_debut,
+                       {MESURES.format(type_expr=expression_type_ecart())}
+                FROM {FACT} f
+                WHERE {predicat.sql}
+                GROUP BY f.semaine_debut
+            ),
+            {_CALENDRIER}
+            SELECT c.semaine_debut,
+                   EXTRACT(isoyear FROM c.semaine_debut)::int  AS annee,
+                   EXTRACT(week    FROM c.semaine_debut)::int  AS semaine,
+                   EXTRACT(isoyear FROM c.semaine_debut)::text || '-S'
+                       || lpad(EXTRACT(week FROM c.semaine_debut)::text, 2, '0')
+                                                              AS semaine_libelle,
+                   {", ".join(f"COALESCE(m.{nom}, 0) AS {nom}" for nom in _MESURES_NOMS)}
+            FROM calendrier c
+            LEFT JOIN mesures m ON m.semaine_debut = c.semaine_debut
+            ORDER BY c.semaine_debut
         """
-        return self._fetch(sql, predicat.params)
+        params = {**predicat.params, "date_debut": filtres.date_debut, "date_fin": filtres.date_fin}
+        return self._fetch(sql, params)
+
+    def semaines_periode(self, filtres: Filtres) -> list[dict[str, Any]]:
+        """Calendrier continu des semaines de la sélection, sans les mesures.
+
+        Sert d'ossature aux restitutions croisées : les colonnes du tableau
+        doivent couvrir la période demandée, y compris les semaines sans
+        production — un trou dans l'axe se lit comme une semaine qui n'a jamais
+        existé.
+        """
+        predicat = construire_predicat(filtres)
+        sql = f"""
+            WITH mesures AS (
+                SELECT DISTINCT f.semaine_debut
+                FROM {FACT} f
+                WHERE {predicat.sql}
+            ),
+            {_CALENDRIER}
+            SELECT c.semaine_debut,
+                   EXTRACT(isoyear FROM c.semaine_debut)::int AS annee,
+                   EXTRACT(week    FROM c.semaine_debut)::int AS semaine
+            FROM calendrier c
+            ORDER BY 1
+        """
+        params = {**predicat.params, "date_debut": filtres.date_debut, "date_fin": filtres.date_fin}
+        return self._fetch(sql, params)
 
     def repartition(
         self, filtres: Filtres, dimension: str, limite: int = 20, mesure: str = "valeur",
@@ -478,7 +583,14 @@ class Repository:
             GROUP BY f.child_itemid, f.semaine_debut, f.annee, f.semaine
             ORDER BY f.child_itemid, f.semaine_debut
         """, predicat.params)
-        return {"production": production, "ecarts": ecarts}
+        # Les colonnes du tableau croisé viennent du calendrier, pas des lignes
+        # rapportées : une semaine d'arrêt de ligne doit apparaître comme une
+        # colonne vide, non disparaître de l'axe.
+        return {
+            "production": production,
+            "ecarts": ecarts,
+            "semaines": self.semaines_periode(filtres),
+        }
 
     # -- Grilles -----------------------------------------------------------
     def grille(
@@ -578,23 +690,41 @@ class Repository:
         )
 
     def nomenclature_du_parent(self, parent_itemid: str) -> list[dict[str, Any]]:
+        """Nomenclature active d'un parent, **surcharges comprises**.
+
+        Le coefficient exposé est celui qui sert réellement au calcul, et les
+        lignes désactivées sont retirées : afficher la valeur de l'ERP dans le
+        tiroir pendant que l'analyse en utilise une autre créerait deux vérités
+        à l'écran, sans moyen de savoir laquelle est la bonne.
+        """
         return self._fetch(
             "SELECT n.child_itemid, a.item_name AS child_name, a.categorie, "
-            "       n.child_qty AS coef_bom, n.child_unitid AS unite, a.std_cost_price "
-            "FROM dim_nomenclature n "
+            "       COALESCE(o.coef_bom, n.child_qty) AS coef_bom, "
+            "       n.child_qty AS coef_erp, "
+            "       (o.coef_bom IS NOT NULL) AS coef_surcharge, "
+            "       n.child_unitid AS unite, a.std_cost_price "
+            f"FROM dim_nomenclature n "
+            f"LEFT JOIN {PARAM_NOMENCLATURE} o "
+            "       ON o.parent_itemid = n.parent_itemid AND o.child_itemid = n.child_itemid "
             "LEFT JOIN dim_article a ON a.item_id = n.child_itemid "
-            "WHERE n.parent_itemid = %(parent)s "
-            "ORDER BY n.child_qty DESC",
+            "WHERE n.parent_itemid = %(parent)s AND COALESCE(o.active, TRUE) "
+            f"  AND NOT EXISTS (SELECT 1 FROM {PARAM_EXCLUSION} x WHERE x.item_id = n.child_itemid) "
+            "ORDER BY COALESCE(o.coef_bom, n.child_qty) DESC",
             {"parent": parent_itemid},
         )
 
     def parents_du_composant(self, child_itemid: str) -> list[dict[str, Any]]:
+        """Parents consommant ce composant, surcharges comprises (cf. ci-dessus)."""
         return self._fetch(
-            "SELECT n.parent_itemid, a.item_name AS parent_name, a.programme, "
-            "       n.child_qty AS coef_bom "
-            "FROM dim_nomenclature n "
+            "SELECT n.parent_itemid, a.item_name AS parent_name, a.programme, a.perimetre, "
+            "       COALESCE(o.coef_bom, n.child_qty) AS coef_bom, "
+            "       (o.coef_bom IS NOT NULL) AS coef_surcharge "
+            f"FROM dim_nomenclature n "
+            f"LEFT JOIN {PARAM_NOMENCLATURE} o "
+            "       ON o.parent_itemid = n.parent_itemid AND o.child_itemid = n.child_itemid "
             "LEFT JOIN dim_article a ON a.item_id = n.parent_itemid "
-            "WHERE n.child_itemid = %(child)s "
+            "WHERE n.child_itemid = %(child)s AND COALESCE(o.active, TRUE) "
+            f"  AND NOT EXISTS (SELECT 1 FROM {PARAM_EXCLUSION} x WHERE x.item_id = n.parent_itemid) "
             "ORDER BY a.programme, n.parent_itemid",
             {"child": child_itemid},
         )

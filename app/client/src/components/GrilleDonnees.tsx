@@ -18,6 +18,7 @@ import { api, telechargerExport } from '@/api/client'
 import type { CleGrille, Colonne, Filtres, Grille, LigneGrille } from '@/api/types'
 import { nombre, valeurCellule } from '@/lib/format'
 import { EtatErreur, EtatVide, SqueletteLignes } from './Etats'
+import { BoutonPli, usePli } from './Repliable'
 
 const TAILLES_PAGE = [25, 50, 100, 250]
 
@@ -26,6 +27,17 @@ const COLONNES_FICHE: Record<string, 'composant' | 'parent'> = {
   child_itemid: 'composant',
   parent_itemid: 'parent',
 }
+
+/**
+ * Colonne portant un périmètre, quel que soit son nom selon la grille.
+ *
+ * Cliquer la valeur ouvre la vue synthétique de CE périmètre : c'est le chemin
+ * le plus court entre « cette ligne a un problème » et le rapport d'atelier qui
+ * le met en contexte. La vue synthétique exigeant un périmètre unique, le clic
+ * remplace la sélection de périmètres au lieu de s'y ajouter — mais laisse tous
+ * les autres filtres en place.
+ */
+const COLONNES_PERIMETRE = new Set(['parent_perimetre', 'perimetre'])
 
 export interface ActionLot {
   libelle: string
@@ -42,6 +54,7 @@ export function GrilleDonnees({
   titre,
   actions = [],
   onOuvrirFiche,
+  onOuvrirPerimetre,
   hauteurSquelette = 10,
 }: {
   cle: CleGrille
@@ -50,6 +63,8 @@ export function GrilleDonnees({
   titre?: string
   actions?: ActionLot[]
   onOuvrirFiche?: (genre: 'composant' | 'parent', id: string) => void
+  /** Absent sur la grille des périmètres : on y est déjà. */
+  onOuvrirPerimetre?: (perimetre: string) => void
   hauteurSquelette?: number
 }) {
   const [tri, setTri] = useState<string>(grille.tri_defaut)
@@ -64,6 +79,9 @@ export function GrilleDonnees({
   const [message, setMessage] = useState<string | null>(null)
   const [occupe, setOccupe] = useState(false)
   const zoneDefilement = useRef<HTMLDivElement>(null)
+  // Une grille repliée laisse sa barre d'outils et son compteur visibles : on
+  // sait ce qu'on a masqué, et on peut toujours exporter sans rouvrir.
+  const { ouvert, basculer } = usePli(`grille.${cle}`, true)
 
   // Un changement de filtre invalide la pagination ET la sélection : garder des
   // lignes cochées qui ne sont plus dans le périmètre produirait un export ou
@@ -186,7 +204,14 @@ export function GrilleDonnees({
   return (
     <div className="grille">
       <div className="grille__barre">
-        <span className="grille__titre">{titre ?? grille.libelle}</span>
+        <BoutonPli ouvert={ouvert} basculer={basculer} libelle={titre ?? grille.libelle} />
+        <span
+          className="grille__titre"
+          onClick={basculer}
+          style={{ cursor: 'pointer' }}
+        >
+          {titre ?? grille.libelle}
+        </span>
         <span className="grille__compteur" title={grille.description}>
           {requete.isFetching && !requete.data
             ? 'chargement…'
@@ -280,6 +305,7 @@ export function GrilleDonnees({
         </div>
       )}
 
+      {ouvert && (
       <div className="grille__defilement" ref={zoneDefilement}>
         {requete.isError ? (
           <EtatErreur erreur={requete.error} onReessayer={() => void requete.refetch()} />
@@ -340,11 +366,17 @@ export function GrilleDonnees({
                         colonne={colonne}
                         valeur={ligne[colonne.cle]}
                         onOuvrirFiche={onOuvrirFiche}
+                        onOuvrirPerimetre={onOuvrirPerimetre}
                       />
                     ))}
                   </tr>
                 )
               })}
+              {requete.data?.totaux && (
+                <tr className="tableau__cale" aria-hidden="true">
+                  <td colSpan={colonnes.length + 1} />
+                </tr>
+              )}
             </tbody>
             <PiedTotaux
               colonnes={colonnes}
@@ -354,7 +386,9 @@ export function GrilleDonnees({
           </table>
         )}
       </div>
+      )}
 
+      {ouvert && (
       <div className="grille__pied">
         <button
           type="button"
@@ -393,6 +427,7 @@ export function GrilleDonnees({
           </select>
         </label>
       </div>
+      )}
     </div>
   )
 }
@@ -464,10 +499,12 @@ function Cellule({
   colonne,
   valeur,
   onOuvrirFiche,
+  onOuvrirPerimetre,
 }: {
   colonne: Colonne
   valeur: unknown
   onOuvrirFiche?: (genre: 'composant' | 'parent', id: string) => void
+  onOuvrirPerimetre?: (perimetre: string) => void
 }) {
   const genreFiche = COLONNES_FICHE[colonne.cle]
   const texte = valeurCellule(valeur, colonne.type, colonne.decimales)
@@ -483,23 +520,26 @@ function Cellule({
     )
   }
 
+  if (COLONNES_PERIMETRE.has(colonne.cle) && onOuvrirPerimetre && valeur) {
+    return (
+      <td className={classeAlignement(colonne)}>
+        <CelluleCliquable
+          texte={texte}
+          aide={`Ouvrir la vue synthétique du périmètre « ${String(valeur)} »`}
+          onActiver={() => onOuvrirPerimetre(String(valeur))}
+        />
+      </td>
+    )
+  }
+
   if (genreFiche && onOuvrirFiche && valeur) {
     return (
       <td className={classeAlignement(colonne)}>
-        <span
-          className="cellule--lien"
-          role="button"
-          tabIndex={0}
-          onClick={() => onOuvrirFiche(genreFiche, String(valeur))}
-          onKeyDown={(evenement) => {
-            if (evenement.key === 'Enter' || evenement.key === ' ') {
-              evenement.preventDefault()
-              onOuvrirFiche(genreFiche, String(valeur))
-            }
-          }}
-        >
-          {texte}
-        </span>
+        <CelluleCliquable
+          texte={texte}
+          aide={`Ouvrir la fiche ${genreFiche} ${String(valeur)}`}
+          onActiver={() => onOuvrirFiche(genreFiche, String(valeur))}
+        />
       </td>
     )
   }
@@ -508,6 +548,35 @@ function Cellule({
     <td className={`${classeAlignement(colonne)}${negatif ? ' cellule--negatif' : ''}`} title={texte}>
       {texte}
     </td>
+  )
+}
+
+/** Valeur de cellule activable au clic comme au clavier. */
+function CelluleCliquable({
+  texte,
+  aide,
+  onActiver,
+}: {
+  texte: string
+  aide: string
+  onActiver: () => void
+}) {
+  return (
+    <span
+      className="cellule--lien"
+      role="button"
+      tabIndex={0}
+      title={aide}
+      onClick={onActiver}
+      onKeyDown={(evenement) => {
+        if (evenement.key === 'Enter' || evenement.key === ' ') {
+          evenement.preventDefault()
+          onActiver()
+        }
+      }}
+    >
+      {texte}
+    </span>
   )
 }
 

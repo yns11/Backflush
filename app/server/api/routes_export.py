@@ -62,7 +62,9 @@ def exporter_synthese(
         )
     donnees = depot.synthese_perimetre(requete.filtres, requete.mesure)
     modele = croiser(
-        donnees["production"], donnees["ecarts"], en_valeur=requete.mesure == "valeur"
+        donnees["production"], donnees["ecarts"],
+        en_valeur=requete.mesure == "valeur",
+        calendrier=donnees["semaines"],
     )
     perimetre = requete.filtres.perimetres[0]
     classeur = construire_classeur_synthese(

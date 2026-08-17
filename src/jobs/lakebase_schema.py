@@ -379,6 +379,57 @@ META_INGESTION = Table(
 
 
 # ---------------------------------------------------------------------------
+# Tables de PARAMÉTRAGE — écrites par l'application, jamais par l'ingestion
+# ---------------------------------------------------------------------------
+# Ces deux tables portent les arbitrages du key-user : quelles références sortir
+# de l'analyse, quelles lignes de nomenclature désactiver ou corriger. Elles
+# sont d'une autre nature que les précédentes :
+#
+# * elles ne viennent pas d'Unity Catalog et n'y retournent pas ;
+# * elles survivent à l'ingestion. Le job publie ses tables par bascule
+#   (DROP + RENAME) : une table de paramétrage prise dans ce mécanisme perdrait
+#   son contenu à chaque exécution nocturne. Elles sont donc créées en
+#   ``IF NOT EXISTS`` et jamais remplacées ;
+# * elles sont les SEULES sur lesquelles l'application a le droit d'écrire.
+#
+# Leur effet est appliqué à la lecture (voir ``app/server/data/faits.py``), pas
+# par recalcul du modèle : un arbitrage doit être visible immédiatement, et
+# réversible sans relancer un job de quarante minutes.
+PARAM_ARTICLE_EXCLU = Table(
+    name="param_article_exclu",
+    source="",
+    comment="Références exclues de l'analyse des écarts, par décision du key-user.",
+    columns=(
+        Column("item_id", "text", primary_key=True),
+        Column("motif", "text", comment="Justification — un arbitrage sans motif est un mystère."),
+        Column("modifie_par", "text"),
+        Column("modifie_le", TS),
+    ),
+)
+
+PARAM_NOMENCLATURE = Table(
+    name="param_nomenclature",
+    source="",
+    comment="Surcharges de nomenclature : lignes désactivées ou coefficient corrigé.",
+    columns=(
+        Column("parent_itemid", "text", primary_key=True),
+        Column("child_itemid", "text", primary_key=True),
+        Column("active", "boolean", comment="FALSE : la ligne sort du calcul d'écart."),
+        Column(
+            "coef_bom", QTY,
+            comment="Coefficient de substitution. NULL : celui de la nomenclature est conservé.",
+        ),
+        Column("motif", "text"),
+        Column("modifie_par", "text"),
+        Column("modifie_le", TS),
+    ),
+)
+
+#: Tables de paramétrage, dans l'ordre de création.
+TABLES_PARAM: tuple[Table, ...] = (PARAM_ARTICLE_EXCLU, PARAM_NOMENCLATURE)
+
+
+# ---------------------------------------------------------------------------
 # Génération du DDL
 # ---------------------------------------------------------------------------
 def qualified(name: str, *, schema: str = SCHEMA) -> str:
@@ -400,6 +451,18 @@ def create_table_sql(table: Table, *, name: str | None = None, schema: str = SCH
         lines.append(f'    CONSTRAINT "{physical_name}_pkey" PRIMARY KEY ({keys})')
     body = ",\n".join(lines)
     return f'CREATE TABLE {qualified(physical_name, schema=schema)} (\n{body}\n);'
+
+
+def create_param_table_sql(table: Table, *, schema: str = SCHEMA) -> str:
+    """DDL **idempotent** d'une table de paramétrage.
+
+    ``IF NOT EXISTS`` n'est pas une commodité : ces tables portent des décisions
+    saisies à la main, qu'aucune source ne pourrait reconstruire. Les recréer
+    reviendrait à les effacer.
+    """
+    return create_table_sql(table, schema=schema).replace(
+        "CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", 1
+    )
 
 
 def create_indexes_sql(table: Table, *, name: str | None = None, schema: str = SCHEMA) -> list[str]:
@@ -430,6 +493,11 @@ def full_ddl(schema: str = SCHEMA) -> str:
         parts.append(create_table_sql(table, schema=schema))
         parts.append(comment_sql(table, schema=schema))
         parts.extend(create_indexes_sql(table, schema=schema))
+        parts.append("")
+    parts.append("-- Paramétrage : créé si absent, jamais remplacé.")
+    for table in TABLES_PARAM:
+        parts.append(create_param_table_sql(table, schema=schema))
+        parts.append(comment_sql(table, schema=schema))
         parts.append("")
     return "\n".join(parts)
 

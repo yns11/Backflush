@@ -89,8 +89,16 @@ export function graduations(min: number, max: number, cible = 4): number[] {
   const normalise = brut / magnitude
   const pas = (normalise >= 5 ? 10 : normalise >= 2 ? 5 : normalise >= 1 ? 2 : 1) * magnitude
 
+  // Le domaine des graduations doit COUVRIR les données, pas s'arrêter à la
+  // dernière graduation « ronde » inférieure au maximum. Avec un pas de 5 M et
+  // un maximum de 12,4 M, s'arrêter à 10 M laissait la barre la plus longue
+  // déborder de la zone de tracé, et son étiquette de valeur sortir du cadre —
+  // le classement le plus important devenait le seul illisible.
+  const debut = Math.floor(bas / pas) * pas
+  const fin = Math.ceil(haut / pas) * pas
+
   const valeurs: number[] = []
-  for (let valeur = Math.floor(bas / pas) * pas; valeur <= haut + pas / 2; valeur += pas) {
+  for (let valeur = debut; valeur <= fin + pas / 2; valeur += pas) {
     valeurs.push(Math.abs(valeur) < pas / 1e6 ? 0 : valeur)
   }
   return valeurs

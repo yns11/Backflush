@@ -183,6 +183,39 @@ class LakebasePool:
             LOGGER.error("Lakebase injoignable : %s", exc)
             raise DonneesIndisponiblesError() from exc
 
+    @contextmanager
+    def connexion_ecriture(self) -> Iterator[psycopg.Connection]:
+        """Connexion autorisée à écrire — **uniquement** sur le paramétrage.
+
+        Le pool ouvre chaque connexion en ``default_transaction_read_only``
+        (voir :meth:`_configure`) : c'est un verrou structurel, qui garantit
+        qu'aucune régression de code ne peut altérer les données analytiques.
+        Le paramétrage du key-user, lui, doit bien s'écrire quelque part.
+
+        Plutôt que d'ouvrir un second pool en lecture-écriture — dont chaque
+        requête de lecture profiterait aussi, ruinant la garantie — la levée est
+        posée **par transaction**, par un ``SET TRANSACTION READ WRITE`` qui ne
+        vaut que pour celle en cours. La portée du droit d'écriture est ainsi
+        exactement le bloc ``with``, et les rares appelants sont trouvables d'un
+        seul ``grep``.
+
+        Les droits Postgres restent la barrière ultime : le principal de service
+        ne reçoit ``INSERT``/``UPDATE``/``DELETE`` que sur les deux tables
+        ``param_*`` (voir ``src/jobs/sync_to_lakebase.py``). Même cette
+        transaction ne peut pas toucher aux tables de faits.
+        """
+        with self.connection() as conn:
+            try:
+                with conn.transaction():
+                    # Doit être la PREMIÈRE instruction de la transaction :
+                    # Postgres refuse de changer le mode d'une transaction déjà
+                    # entamée.
+                    conn.execute("SET TRANSACTION READ WRITE")
+                    yield conn
+            except psycopg.Error as exc:
+                LOGGER.error("Écriture Lakebase refusée : %s", exc)
+                raise
+
     def ping(self) -> dict[str, Any]:
         """Teste la connexion et retourne un diagnostic exploitable par /api/health."""
         if self._pool is None:
