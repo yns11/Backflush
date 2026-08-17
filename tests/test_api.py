@@ -41,7 +41,9 @@ class TestRoutesSansBase:
 
     def test_dictionnaire_des_grilles(self, client: TestClient) -> None:
         grilles = client.get("/api/meta/grilles").json()
-        assert set(grilles) == {"details", "composants", "programmes", "perimetres", "parents"}
+        assert set(grilles) == {
+            "details", "details_of", "composants", "programmes", "perimetres", "parents",
+        }
         for grille in grilles.values():
             assert grille["colonnes"], "Une grille sans colonne est inexploitable."
             assert grille["cle_ligne"], "Sans clé de ligne, la sélection est impossible."
@@ -148,7 +150,7 @@ class TestAnalytique:
 @besoin_base
 class TestGrilles:
     @pytest.mark.parametrize(
-        "cle", ["details", "composants", "programmes", "perimetres", "parents"]
+        "cle", ["details", "details_of", "composants", "programmes", "perimetres", "parents"]
     )
     def test_chaque_grille_renvoie_une_page_coherente(self, client: TestClient, cle: str) -> None:
         corps = client.post(f"/api/grilles/{cle}", json={"filtres": PERIODE, "taille": 10}).json()

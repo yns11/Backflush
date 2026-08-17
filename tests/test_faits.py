@@ -26,8 +26,10 @@ from app.server.data.faits import (
     COLONNES_FAIT,
     COLONNES_RECALCULEES,
     SOURCE_FAITS,
+    SOURCE_FAITS_OF,
     TABLE_ARTICLE_EXCLU,
     TABLE_DETAIL,
+    TABLE_DETAIL_OF,
     TABLE_NOMENCLATURE_PARAM,
 )
 from src.jobs.lakebase_schema import (
@@ -226,21 +228,32 @@ class TestPlanDExecution:
     développement ne révèle pas.
     """
 
-    def test_le_filtre_de_date_attaque_encore_l_index(self, connexion) -> None:
+    @pytest.mark.parametrize(
+        ("table", "source"),
+        [(TABLE_DETAIL, SOURCE_FAITS), (TABLE_DETAIL_OF, SOURCE_FAITS_OF)],
+    )
+    def test_le_filtre_de_date_attaque_encore_l_index(
+        self, connexion, table: str, source: str
+    ) -> None:
         from app.server.domain.filters import Filtres, construire_predicat
 
         filtres = Filtres(date_debut="2026-05-01", date_fin="2026-05-31")
         predicat = construire_predicat(filtres)
         with connexion.cursor() as cur:
-            cur.execute(f"ANALYZE {TABLE_DETAIL}")
+            cur.execute(f"ANALYZE {table}")
             cur.execute(
-                f"EXPLAIN SELECT count(*) FROM {SOURCE_FAITS} f WHERE {predicat.sql}",
+                f"EXPLAIN SELECT count(*) FROM {source} f WHERE {predicat.sql}",
                 predicat.params,
             )
             plan = "\n".join(ligne[0] for ligne in cur.fetchall())
 
-        assert "Index Scan" in plan or "Bitmap Index Scan" in plan, plan
-        assert f"Seq Scan on {TABLE_DETAIL}" not in plan, (
+        # Le TYPE d'accès indexé importe peu — parcours simple, « index only » ou
+        # bitmap selon les statistiques du moment. Ce qui doit tenir, c'est
+        # qu'un index soit utilisé et que la table de faits ne soit pas balayée.
+        assert any(
+            acces in plan for acces in ("Index Scan", "Index Only Scan", "Bitmap Index Scan")
+        ), plan
+        assert f"Seq Scan on {table}" not in plan, (
             "La table dérivée n'est plus remontée par le planificateur : chaque "
-            f"requête balaie {TABLE_DETAIL} en entier.\n{plan}"
+            f"requête balaie {table} en entier.\n{plan}"
         )

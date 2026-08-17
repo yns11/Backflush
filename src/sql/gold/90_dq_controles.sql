@@ -190,6 +190,31 @@ WITH controles AS (
 
     UNION ALL
 
+    -- 9 bis. Réconciliation détail / détail par OF.
+    --    Les deux tables décrivent la même matière à deux mailles ; leur total
+    --    d'écart doit être identique. Une divergence signale que les règles
+    --    d'agrégation de 20/21 et celles, dupliquées, de 31 ont pris des
+    --    chemins différents — le seul défaut que la duplication rend possible.
+    --    La tolérance est relative : sur des quantités en numeric(38,6), un
+    --    seuil absolu deviendrait faux à mesure que la volumétrie croît.
+    SELECT
+        'reconciliation_of_detail', 'ERREUR', 'Cohérence',
+        CAST(
+            CASE WHEN ABS(
+                COALESCE((SELECT SUM(ecart_brut) FROM {catalog}.{schema}.fact_ecart_of), 0)
+              - COALESCE((SELECT SUM(ecart_brut) FROM {catalog}.{schema}.fact_ecart_backflush), 0)
+            ) > GREATEST(
+                    0.01,
+                    ABS(COALESCE(
+                        (SELECT SUM(ecart_brut) FROM {catalog}.{schema}.fact_ecart_backflush), 0
+                    )) * 0.0001
+                )
+            THEN 1 ELSE 0 END AS BIGINT),
+        0,
+        'Le total des écarts par ordre de fabrication diffère de celui de la table de détail. Les deux mailles doivent porter la même matière ; seule leur décomposition non-conso / surconso peut différer.'
+
+    UNION ALL
+
     -- 10. Réconciliation agrégat / détail : tolérance 0,01 € sur le total.
     SELECT
         'reconciliation_agg_detail', 'ERREUR', 'Cohérence',

@@ -260,6 +260,60 @@ FACT_ECART_BACKFLUSH = Table(
 # ---------------------------------------------------------------------------
 # Agrégats
 # ---------------------------------------------------------------------------
+FACT_ECART_OF = Table(
+    name="fact_ecart_of",
+    source="fact_ecart_of",
+    comment=(
+        "Écarts de consommation par ordre de fabrication. "
+        "Grain : OF × parent × composant × semaine ISO."
+    ),
+    columns=(
+        Column("semaine_debut", "date", primary_key=True),
+        Column("prod_id", "text", primary_key=True, comment="Ordre de fabrication (ProdId)"),
+        Column("parent_itemid", "text", primary_key=True),
+        Column("child_itemid", "text", primary_key=True),
+        Column("annee", "integer"),
+        Column("semaine", "integer"),
+        Column("prod_bomid", "text"),
+        Column("prod_date_cloture", TS),
+        Column("prod_statut", "text"),
+        Column("parent_programme", "text"),
+        Column("parent_perimetre", "text"),
+        Column("parent_name", "text"),
+        Column("parent_categorie", "text"),
+        Column("child_name", "text"),
+        Column("child_categorie", "text"),
+        Column("child_unite", "text"),
+        Column("coef_bom", QTY),
+        Column("qty_parent_produite", QTY),
+        Column("conso_reelle", QTY),
+        Column("conso_theorique", QTY),
+        Column("ecart_brut", QTY),
+        Column("ecart_pct", PCT),
+        Column("type_ecart", "text"),
+        Column("statut_ligne", "text"),
+        Column("child_cout_standard", MONEY),
+        Column("ecart_valorise", MONEY),
+        Column("is_coef_uniforme", "boolean"),
+        Column("ecart_equivalent_produit", QTY),
+        Column("nb_transactions_conso", "integer"),
+        Column("nb_retours", "integer"),
+        Column("loaded_at", TS),
+    ),
+    indexes=(
+        Index("semaine", "(semaine_debut)"),
+        # L'usage premier de cette table est « montre-moi cet OF » : sans cet
+        # index, retrouver un ordre de fabrication balaierait tout l'historique.
+        Index("of", "(prod_id)"),
+        Index("prog_semaine", "(parent_programme, semaine_debut)"),
+        Index("perim_semaine", "(parent_perimetre, semaine_debut)"),
+        Index("child_semaine", "(child_itemid, semaine_debut)"),
+        Index("parent_semaine", "(parent_itemid, semaine_debut)"),
+        Index("impact", "(semaine_debut, (abs(ecart_valorise)) DESC)"),
+        Index("recherche", f"(({SEARCH_EXPRESSION}) gin_trgm_ops)", method="gin"),
+    ),
+)
+
 AGG_ECART_HEBDO_PROGRAMME = Table(
     name="agg_ecart_hebdo_programme",
     source="agg_ecart_hebdo_programme",
@@ -348,6 +402,7 @@ TABLES: tuple[Table, ...] = (
     FACT_PRODUCTION_PARENT,
     FACT_CONSOMMATION_COMPOSANT,
     FACT_ECART_BACKFLUSH,
+    FACT_ECART_OF,
     AGG_ECART_HEBDO_PROGRAMME,
     AGG_ECART_COMPOSANT,
     DQ_CONTROLES,

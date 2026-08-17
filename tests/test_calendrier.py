@@ -53,12 +53,24 @@ class TestAxeContinu:
     def test_une_semaine_sans_mouvement_est_presente_et_a_zero(
         self, client: TestClient, connexion
     ) -> None:
+        """Creuse un trou dans les faits, vérifie l'axe, puis remet tout en place.
+
+        La suppression doit être VALIDÉE : l'application lit par une autre
+        connexion, et ne verrait rien d'une transaction ouverte. Une annulation
+        ne suffit donc pas à réparer — les lignes sont mises de côté dans une
+        table temporaire et réinsérées quoi qu'il arrive. Sans cela, ce test
+        ampute durablement le jeu local et fait échouer, plus tard et ailleurs,
+        des tests qui n'y sont pour rien.
+        """
         semaines = _semaines(client, {})
         cible = semaines[len(semaines) // 2]["semaine_debut"]
 
-        # La transaction de la fixture est annulée en fin de test : la table de
-        # faits est rendue intacte.
         with connexion.cursor() as cur:
+            cur.execute(
+                "CREATE TEMP TABLE sauvegarde_semaine AS "
+                "SELECT * FROM fact_ecart_backflush WHERE semaine_debut = %s",
+                (cible,),
+            )
             cur.execute(
                 "DELETE FROM fact_ecart_backflush WHERE semaine_debut = %s", (cible,)
             )
@@ -70,7 +82,12 @@ class TestAxeContinu:
             assert trouvee["ecart_valorise"] == 0
             assert len(apres) == len(semaines), "La semaine vide doit rester une colonne."
         finally:
-            connexion.rollback()
+            with connexion.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO fact_ecart_backflush SELECT * FROM sauvegarde_semaine"
+                )
+                cur.execute("DROP TABLE sauvegarde_semaine")
+            connexion.commit()
 
     def test_une_plage_plus_large_que_l_historique_est_bridee(
         self, client: TestClient

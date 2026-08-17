@@ -8,7 +8,13 @@
 
 export type TypeEcart = 'Non-consommation' | 'Surconsommation' | 'Conforme'
 export type StatutLigne = 'Nominal' | 'Hors nomenclature' | 'Sans consommation'
-export type CleGrille = 'details' | 'composants' | 'programmes' | 'perimetres' | 'parents'
+export type CleGrille =
+  | 'details'
+  | 'details_of'
+  | 'composants'
+  | 'programmes'
+  | 'perimetres'
+  | 'parents'
 
 /** Mesure d'affichage et de classement : euros ou unités. */
 export type Mesure = 'valeur' | 'quantite'

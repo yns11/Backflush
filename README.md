@@ -23,7 +23,7 @@ Dynamics 365 F&O → Lakehouse → Lakebase → App).
 | **Programmes** | Grille agrégée par programme × semaine, ouverture vers le détail filtré |
 | **Périmètres** | Grille agrégée par ligne de production × semaine, et **vue synthétique** en tableau croisé (production par parent, écart par composant en équivalent produit) |
 | **Références** | Grille agrégée par composant (écart cumulé, éq. produit, impact €, coef BOM, uniformité), recherche plein texte |
-| **Détail** | Grille ligne à ligne `parent × composant × semaine` — la granularité d'audit |
+| **Détail** | Grille ligne à ligne `parent × composant × semaine` — la granularité d'audit. Un bouton ajoute l'**ordre de fabrication** à cette granularité : même total d'écart, décomposition plus fine, et le biais de calage des OF à cheval sur deux semaines devient visible |
 | **Base article** | Référentiel article : **exclure** des références de l'analyse, à la ligne ou par lot, avec motif et auteur. L'impact porté par chaque référence est affiché en face du bouton |
 | **Nomenclature** | Nomenclature active : **désactiver** une ligne ou **corriger** son coefficient. Le coefficient de l'ERP reste affiché à côté du coefficient retenu |
 | **Assistant IA** | Chat outillé (function calling) sur production, consommation, écarts, base article et nomenclature |

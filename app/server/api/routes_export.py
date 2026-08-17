@@ -91,7 +91,7 @@ class RequeteExport(BaseModel):
 def exporter(
     depot: RepositoryDep,
     settings: SettingsDep,
-    cle: Literal["details", "composants", "programmes", "perimetres", "parents"],
+    cle: Literal["details", "details_of", "composants", "programmes", "perimetres", "parents"],
     requete: RequeteExport = Body(...),
 ) -> StreamingResponse:
     """Construit le classeur et le renvoie en pièce jointe.

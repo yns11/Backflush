@@ -16,6 +16,58 @@ import { GrilleDonnees } from '@/components/GrilleDonnees'
 import { useFiltres } from '@/state/filtres'
 import { useNavigation } from '@/state/navigation'
 
+/**
+ * Écran « Détail » — au choix, à la maille parent ou à la maille OF.
+ *
+ * L'ordre de fabrication est la maille d'investigation réelle de l'atelier :
+ * deux lancements du même parent sur la même semaine y sont deux histoires
+ * distinctes, souvent sur des équipes ou des postes différents, que la maille
+ * parent × semaine confond.
+ *
+ * Le basculement est explicite, et non un axe ajouté d'office, parce que les
+ * deux lectures ne se valent pas et ne donnent pas les mêmes chiffres : à la
+ * maille OF, la non-consommation et la surconsommation sont toutes deux plus
+ * élevées. Le total, lui, est identique — c'est le décalage des OF à cheval sur
+ * deux semaines qui cesse de se compenser. La description de la grille, servie
+ * par le serveur, l'énonce : sans elle, l'écart entre les deux écrans passerait
+ * pour une incohérence de l'application.
+ */
+export function PageDetail({
+  onAnalyseIA,
+}: {
+  onAnalyseIA: (question: string, reponse: ReponseAssistant) => void
+}) {
+  const [parOf, setParOf] = useState(false)
+
+  return (
+    <div className="pile">
+      <div className="rang" style={{ alignItems: 'flex-start' }}>
+        <div className="bascule" role="group" aria-label="Granularité du détail">
+          {(
+            [
+              [false, 'Par parent', 'Une ligne par parent, composant et semaine.'],
+              [true, 'Par OF', "Ajoute l'ordre de fabrication à la granularité."],
+            ] as const
+          ).map(([valeur, libelle, aide]) => (
+            <button
+              key={libelle}
+              type="button"
+              className="bascule__option"
+              aria-pressed={parOf === valeur}
+              title={aide}
+              onClick={() => setParOf(valeur)}
+            >
+              {libelle}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <PageGrille cle={parOf ? 'details_of' : 'details'} onAnalyseIA={onAnalyseIA} />
+    </div>
+  )
+}
+
 export function PageGrille({
   cle,
   onAnalyseIA,
@@ -64,6 +116,11 @@ export function PageGrille({
       )}
 
       <GrilleDonnees
+        // Change de grille = change de jeu de colonnes, de tris et de clé de
+        // ligne. Sans cette clé React, le composant est réutilisé tel quel et
+        // conserve l'état initialisé pour la grille précédente — les colonnes
+        // propres à la nouvelle n'apparaissent jamais.
+        key={cle}
         cle={cle}
         grille={grille}
         filtres={filtres}

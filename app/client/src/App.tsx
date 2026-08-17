@@ -18,7 +18,7 @@ import { BlocRepliable } from '@/components/Repliable'
 import { SlicerTemporel } from '@/components/SlicerTemporel'
 import { TiroirFiche } from '@/components/TiroirFiche'
 import { BaseArticle } from '@/pages/BaseArticle'
-import { PageGrille } from '@/pages/Grilles'
+import { PageDetail, PageGrille } from '@/pages/Grilles'
 import { Nomenclature } from '@/pages/Nomenclature'
 import { PerimetreSynthetique } from '@/pages/PerimetreSynthetique'
 import { Synthese } from '@/pages/Synthese'
@@ -133,7 +133,7 @@ function Coquille({ optionsChargement }: { optionsChargement: boolean }) {
         {page === 'programmes' && <PageGrille cle="programmes" onAnalyseIA={surAnalyseIA} />}
         {page === 'perimetres' && <VuePerimetres onAnalyseIA={surAnalyseIA} />}
         {page === 'references' && <PageGrille cle="composants" onAnalyseIA={surAnalyseIA} />}
-        {page === 'detail' && <PageGrille cle="details" onAnalyseIA={surAnalyseIA} />}
+        {page === 'detail' && <PageDetail onAnalyseIA={surAnalyseIA} />}
         {page === 'articles' && <BaseArticle />}
         {page === 'nomenclature' && <Nomenclature />}
         {page === 'assistant' && (

@@ -24,7 +24,7 @@ from psycopg.rows import dict_row
 
 from app.server.core.errors import RequeteInvalideError
 from app.server.core.lakebase import LakebasePool
-from app.server.data.faits import SOURCE_FAITS
+from app.server.data.faits import SOURCE_FAITS, SOURCE_FAITS_OF
 from app.server.data.faits import TABLE_ARTICLE_EXCLU as PARAM_EXCLUSION
 from app.server.data.faits import TABLE_DETAIL as FACT_DETAIL
 from app.server.data.faits import TABLE_NOMENCLATURE_PARAM as PARAM_NOMENCLATURE
@@ -247,6 +247,28 @@ TRI_SQL: dict[str, dict[str, str]] = {
         "conso_reelle": "conso_reelle",
     },
 }
+
+#: La grille par OF trie comme la grille de détail, plus l'axe de l'ordre de
+#: fabrication. Dérivée plutôt que recopiée : les deux décrivent le même écart,
+#: et un tri disponible d'un côté seulement passerait pour un bug.
+TRI_SQL["details_of"] = {
+    **TRI_SQL["details"],
+    "prod_id": "f.prod_id",
+    "prod_statut": "f.prod_statut",
+    "prod_date_cloture": "f.prod_date_cloture",
+}
+
+#: Source de faits par grille.
+#:
+#: Toutes les grilles lisent la table de détail à la maille parent, sauf celle
+#: par ordre de fabrication. Les deux sources appliquent le même paramétrage :
+#: les deux écrans doivent parler des mêmes lignes.
+SOURCE_PAR_GRILLE: dict[str, str] = {"details_of": SOURCE_FAITS_OF}
+
+
+def source_de(cle: str) -> str:
+    """Table (dérivée) que doit lire une grille donnée."""
+    return SOURCE_PAR_GRILLE.get(cle, FACT)
 
 
 class Repository:
@@ -485,7 +507,7 @@ class Repository:
         }
 
 
-    def totaux(self, filtres: Filtres) -> dict[str, Any]:
+    def totaux(self, filtres: Filtres, cle: str = "details") -> dict[str, Any]:
         """Totaux de la sélection ENTIÈRE, pour le pied de page des grilles.
 
         Ce ne sont pas les totaux de la page affichée : additionner cinquante
@@ -494,17 +516,31 @@ class Repository:
         somme des colonnes — ils sont recalculés sur toute la sélection, sans
         quoi un parent présent dans trois semaines serait compté trois fois.
 
+        La grille lue est passée en argument : la vue par ordre de fabrication
+        n'a ni la même source ni le même nombre de lignes, et lui servir les
+        totaux de la maille parent afficherait un pied en contradiction avec le
+        corps du tableau.
+
         La quantité produite est dédoublonnée par (parent, semaine) avant
         sommation : elle est répétée sur chaque ligne de composant.
         """
         predicat = construire_predicat(filtres)
+        source = source_de(cle)
+        # La quantité produite est portée par chaque ligne de composant : elle
+        # est dédoublonnée sur la clé de production de la maille lue, faute de
+        # quoi elle serait multipliée par le nombre de lignes de nomenclature.
+        cle_production = (
+            "f.prod_id, f.parent_itemid, f.semaine_debut"
+            if cle == "details_of"
+            else "f.parent_itemid, f.semaine_debut"
+        )
         sql = f"""
             WITH production AS (
-                SELECT f.parent_itemid, f.semaine_debut,
+                SELECT {cle_production},
                        MAX(f.qty_parent_produite) AS qty_semaine
-                FROM {FACT} f
+                FROM {source} f
                 WHERE {predicat.sql}
-                GROUP BY f.parent_itemid, f.semaine_debut
+                GROUP BY {cle_production}
             )
             SELECT {MESURES.format(type_expr=expression_type_ecart())},
                    (SELECT COALESCE(SUM(qty_semaine), 0) FROM production) AS qty_produite,
@@ -514,7 +550,7 @@ class Repository:
                    CASE WHEN SUM(f.conso_theorique) > 0
                         THEN SUM(f.ecart_brut) / SUM(f.conso_theorique) * 100 END
                                                   AS ecart_pct_global
-            FROM {FACT} f
+            FROM {source} f
             WHERE {predicat.sql}
         """
         return self._fetch_one(sql, predicat.params) or {}
@@ -627,7 +663,7 @@ class Repository:
         # la tête d'un classement par impact.
         ordre = f"{expressions[tri]} {sens.upper()} NULLS LAST"
         sql = _SQL_GRILLES[cle].format(
-            fact=FACT,
+            fact=source_de(cle),
             mesures=MESURES.format(type_expr=expression_type_ecart()),
             type_expr=expression_type_ecart(),
             semaine_libelle=SEMAINE_LIBELLE,
@@ -670,7 +706,7 @@ class Repository:
         predicat = construire_predicat(filtres)
         params = {**predicat.params, "limite": _borne(limite, 1, 1_000_000), "decalage": 0}
         sql = _SQL_GRILLES[cle].format(
-            fact=FACT,
+            fact=source_de(cle),
             mesures=MESURES.format(type_expr=expression_type_ecart()),
             type_expr=expression_type_ecart(),
             semaine_libelle=SEMAINE_LIBELLE,
@@ -783,6 +819,45 @@ _SQL_GRILLES: dict[str, str] = {
         FROM {fact} f
         WHERE {predicat}
         ORDER BY {ordre}, f.semaine_debut DESC, f.parent_itemid, f.child_itemid
+        LIMIT %(limite)s OFFSET %(decalage)s
+    """,
+    # Même projection que « details », plus l'axe de l'ordre de fabrication.
+    # Le SQL est distinct plutôt que paramétré : les deux grilles ne lisent pas
+    # la même table, et un template commun aurait fait dépendre la plus utilisée
+    # d'une abstraction au service de la seconde.
+    "details_of": """
+        SELECT f.semaine_debut,
+               f.annee,
+               f.semaine,
+               {semaine_libelle}                AS semaine_libelle,
+               f.prod_id,
+               f.prod_statut,
+               f.prod_bomid,
+               f.prod_date_cloture,
+               f.parent_programme,
+               f.parent_perimetre,
+               f.parent_itemid,
+               f.parent_name,
+               f.child_itemid,
+               f.child_name,
+               f.child_categorie,
+               f.child_unite,
+               f.coef_bom,
+               f.qty_parent_produite,
+               f.conso_theorique,
+               f.conso_reelle,
+               f.ecart_brut,
+               f.ecart_pct,
+               ({type_expr})                    AS type_ecart,
+               f.statut_ligne,
+               f.ecart_equivalent_produit,
+               f.child_cout_standard,
+               f.ecart_valorise,
+               abs(f.ecart_valorise)            AS ecart_valorise_absolu,
+               COUNT(*) OVER ()                 AS _total
+        FROM {fact} f
+        WHERE {predicat}
+        ORDER BY {ordre}, f.semaine_debut DESC, f.prod_id, f.child_itemid
         LIMIT %(limite)s OFFSET %(decalage)s
     """,
     "composants": """

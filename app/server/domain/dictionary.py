@@ -308,10 +308,57 @@ GRILLE_PARENTS = Grille(
     ],
 )
 
+#: Colonnes propres à l'ordre de fabrication, insérées en tête de la grille de
+#: détail : c'est l'axe qu'on vient chercher, il ne doit pas être à faire
+#: défiler.
+_COLONNES_OF = [
+    Colonne(cle="prod_id", libelle="OF", type="texte", largeur=130,
+            aide="Ordre de fabrication (ProdId) portant le mouvement."),
+    Colonne(cle="prod_statut", libelle="Statut OF", type="badge", largeur=130,
+            aide="Statut D365 de l'ordre. Un écart sur un OF non terminé est "
+                 "attendu : il lui reste des mouvements à venir."),
+    Colonne(cle="prod_bomid", libelle="BOM de l'OF", type="texte", largeur=140, visible=False,
+            aide="Nomenclature figée sur l'ordre au lancement. Peut différer de "
+                 "la nomenclature active si celle-ci a évolué depuis."),
+    Colonne(cle="prod_date_cloture", libelle="Clôture OF", type="date", largeur=110,
+            visible=False),
+]
+
+#: Grille de détail **par ordre de fabrication** — dérivée de la précédente.
+#:
+#: Les colonnes sont reprises telles quelles plutôt que redéclarées : les deux
+#: grilles décrivent le même écart à un cran d'écart, et une divergence de
+#: libellé ou de format entre elles ne serait qu'une source de doute.
+#: `child_programme` n'existe pas à cette maille et n'est de toute façon pas
+#: exposé par la grille de détail.
+GRILLE_DETAIL_OF = Grille(
+    cle="details_of",
+    libelle="Détail des écarts par OF",
+    description=(
+        "Une ligne par ordre de fabrication, composant et semaine. Le total des "
+        "écarts est identique à celui de la vue par parent ; la décomposition "
+        "non-consommation / surconsommation, elle, est plus élevée des deux "
+        "côtés — c'est le décalage des OF à cheval sur deux semaines, que la "
+        "maille parent masquait."
+    ),
+    cle_ligne=["semaine_debut", "prod_id", "parent_itemid", "child_itemid"],
+    tri_defaut="ecart_valorise_absolu",
+    colonnes=[
+        _SEMAINE,
+        _SEMAINE_DEBUT,
+        *_COLONNES_OF,
+        *[
+            colonne
+            for colonne in GRILLE_DETAIL.colonnes
+            if colonne.cle not in {"semaine_libelle", "semaine_debut"}
+        ],
+    ],
+)
+
 GRILLES: dict[str, Grille] = {
     grille.cle: grille
     for grille in (
-        GRILLE_DETAIL, GRILLE_COMPOSANTS, GRILLE_PROGRAMMES,
+        GRILLE_DETAIL, GRILLE_DETAIL_OF, GRILLE_COMPOSANTS, GRILLE_PROGRAMMES,
         GRILLE_PERIMETRES, GRILLE_PARENTS,
     )
 }

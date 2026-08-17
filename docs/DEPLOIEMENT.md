@@ -294,6 +294,7 @@ SQL sur les seules routes concernées.
 
 | Changement | Objet |
 |---|---|
+| Table ajoutée | `fact_ecart_of` — le détail des écarts avec l'axe de l'ordre de fabrication |
 | Table renommée | `dim_coef_programme` → `dim_coef_perimetre` (clé `perimetre` + `child_itemid`) |
 | Colonnes ajoutées | `dim_article.perimetre`, `dim_article.type_produit`, `fact_ecart_backflush.parent_perimetre`, `fact_production_parent.parent_perimetre`, `agg_*.perimetre` |
 | Source ajoutée | `silver_erp_ye.produits_fabriques` |
@@ -465,6 +466,8 @@ Puis, sur l'URL de l'application :
 | `relation "dim_coef_perimetre" does not exist`, ou colonne `parent_perimetre` inconnue | Le bundle a été déployé sans relancer le pipeline après la montée de version du modèle | `databricks bundle run backflush_pipeline` (§4) |
 | `relation "param_article_exclu" does not exist` sur les écrans de paramétrage | Le pipeline n'a pas été relancé depuis l'ajout de ces écrans : c'est lui qui crée les tables | `databricks bundle run backflush_pipeline` (§4) |
 | `permission denied for table param_nomenclature` à l'enregistrement d'une correction | Les tables de paramétrage existent mais le `GRANT` d'écriture n'a pas été rejoué (`app_service_principal` vide au moment de l'exécution) | Renseigner la variable, redéployer, relancer le job — ou accorder `INSERT, UPDATE, DELETE` à la main (§5) |
+| `reconciliation_of_detail` en anomalie | Les règles d'agrégation de `21_fact_consommation_composant.sql` et celles, dupliquées, de `31_fact_ecart_of.sql` ont divergé | Comparer les deux fichiers : catégories de référence, exclusion des mouvements supprimés, signe et retours doivent être identiques |
+| L'écran « Détail par OF » affiche plus de non-consommation ET plus de surconsommation que la vue par parent | Comportement attendu, pas une anomalie : le décalage des OF à cheval sur deux semaines cesse de se compenser | Vérifier que le total (`écart net`) est bien identique entre les deux mailles — c'est la seule égalité qui doive tenir |
 | Les chiffres ne correspondent plus à ceux de Power BI | Un paramétrage est en vigueur : des références sont exclues ou des coefficients corrigés | `GET /api/parametrage/resume` en donne le décompte ; le détail est dans les écrans « Base article » et « Nomenclature » |
 | Tous les périmètres valent `NON RENSEIGNE` | `produits_fabriques.ligne_de_prod` vide, ou `ref_parent` ne correspond pas aux `item_id` des parents | Vérifier la source ; le contrôle `parent_sans_perimetre` de `dq_controles` le quantifie |
 | Le job gold échoue sur une colonne absente de `produits_fabriques` | Le contrat de colonnes attendu (`src/jobs/build_gold.py`, `COLONNES_SOURCE`) n'est pas satisfait | Aligner la source ou le contrat — l'échec au démarrage est délibéré, il vaut mieux qu'un modèle silencieusement faux |

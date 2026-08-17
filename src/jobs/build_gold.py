@@ -273,6 +273,7 @@ PUBLISHED_TABLES = (
     "fact_production_parent",
     "fact_consommation_composant",
     "fact_ecart_backflush",
+    "fact_ecart_of",
     "agg_ecart_hebdo_programme",
     "agg_ecart_composant",
     "dq_controles",

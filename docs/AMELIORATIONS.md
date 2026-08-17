@@ -70,6 +70,35 @@ sans objet.
 **Vérification.** Comparer, sur un trimestre, l'écart hebdomadaire actuel et
 l'écart par OF ré-agrégé. La différence mesure exactement le biais de calage.
 
+#### Ce qui est déjà en place — et ce qui ne l'est pas
+
+Un **premier pas** est livré : la table `fact_ecart_of` porte l'axe de l'ordre de
+fabrication, et l'écran « Détail » bascule entre les deux mailles.
+
+Ce que cela apporte dès maintenant :
+
+- l'OF devient une clé d'investigation — deux lancements du même parent sur la
+  même semaine ne sont plus confondus ;
+- **le biais de calage devient mesurable**. C'est même la vérification proposée
+  ci-dessus, désormais faite en continu : le total des écarts est identique entre
+  les deux mailles, mais la non-consommation et la surconsommation y sont toutes
+  deux plus élevées, du même montant. Cet écart de décomposition EST le biais.
+  Le contrôle `reconciliation_of_detail` garantit l'égalité des totaux, et
+  `tests/test_grain_of.py` la divergence des décompositions.
+
+Ce que cela n'apporte pas : la **correction** du biais. La table conserve la
+semaine du mouvement ; un OF à cheval produit donc toujours deux lignes de sens
+opposés. Corriger suppose de rattacher tous les mouvements d'un OF à une seule
+semaine — celle de `finisheddate` — et de n'arrêter le compte que sur les OF
+clôturés, ce qui change la nature de la mesure hebdomadaire : elle cesserait de
+répondre à « qu'a-t-on consommé cette semaine » pour répondre à « quels OF
+soldés cette semaine ont dérivé ». Les deux lectures sont légitimes et ne
+répondent pas à la même question ; le choix est métier, pas technique.
+
+L'étape suivante, si elle est retenue, consiste donc à ajouter une maille
+`prod_id` **sans semaine** (un OF, un écart, une date de clôture), et non à
+modifier celle qui existe.
+
 ### 2. Prise en compte du taux de rebut de nomenclature
 
 **Le défaut.** `scrapvar` (rebut prévu au paramétrage BOM) est ignoré. Un
