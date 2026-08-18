@@ -13,6 +13,13 @@
  * croisements qui n'existent pas — c'est l'erreur de lecture la plus fréquente
  * des graphiques d'écart. Aligner deux panneaux sur le même axe temporel donne
  * la même comparaison, sans le mensonge visuel.
+ *
+ * Le panneau BAS suit la bascule valeur/quantité : en euros il porte l'impact
+ * valorisé, en unités l'écart net. Le panneau haut, lui, est en quantités dans
+ * les deux cas — c'est sa nature, pas un choix d'affichage. Le composant exige
+ * donc `enValeur` plutôt que de le supposer : une étiquette « € » sur un axe en
+ * unités est un graphique juste et une légende fausse, ce qui se remarque plus
+ * tard et coûte plus cher qu'une erreur franche.
  */
 
 import { useMemo } from 'react'
@@ -43,14 +50,25 @@ const INTERSTICE = 40
 
 export function TendanceHebdo({
   semaines,
+  enValeur,
   largeur = 900,
   onSelectionSemaine,
 }: {
   semaines: SemaineAgregee[]
+  /** Mesure active. Gouverne le panneau bas : son échelle, son unité, son libellé. */
+  enValeur: boolean
   largeur?: number
   onSelectionSemaine?: (semaine: SemaineAgregee) => void
 }) {
   const { afficher, masquer, element } = useInfobulle()
+
+  // Grandeur du panneau bas, et sa mise en forme. Les deux tiennent ensemble :
+  // changer l'une sans l'autre produit exactement le défaut qu'on corrige ici.
+  const impactDe = (semaine: SemaineAgregee) =>
+    Number(enValeur ? semaine.ecart_valorise : semaine.ecart_net)
+  const formaterImpact = (valeur: number) =>
+    enValeur ? euro(valeur, 0, true) : nombre(valeur, 0)
+  const uniteImpact = enValeur ? '€' : 'unités'
 
   const hauteur = MARGES.haut + HAUTEUR_VOLUME + INTERSTICE + HAUTEUR_IMPACT + MARGES.bas
   const largeurTrace = Math.max(largeur - MARGES.gauche - MARGES.droite, 80)
@@ -65,7 +83,7 @@ export function TendanceHebdo({
     // panneau.
     const ticksVolume = graduations(0, sommet, 3)
     const maxVolume = Math.max(sommet, ...ticksVolume)
-    const impacts = semaines.map((s) => Number(s.ecart_valorise))
+    const impacts = semaines.map(impactDe)
     const ticksImpact = graduations(Math.min(0, ...impacts), Math.max(0, ...impacts), 3)
     const minImpact = Math.min(...ticksImpact)
     const maxImpact = Math.max(...ticksImpact)
@@ -86,7 +104,9 @@ export function TendanceHebdo({
       zeroImpact: yImpact(0),
       baseVolume: MARGES.haut + HAUTEUR_VOLUME,
     }
-  }, [semaines])
+    // `enValeur` fait partie des dépendances par l'intermédiaire d'`impactDe` :
+    // sans lui, la bascule laisserait l'ancienne échelle en place.
+  }, [semaines, enValeur])  // eslint-disable-line react-hooks/exhaustive-deps
 
   if (semaines.length === 0) return null
 
@@ -103,7 +123,11 @@ export function TendanceHebdo({
         width="100%"
         viewBox={`0 0 ${largeur} ${hauteur}`}
         role="img"
-        aria-label="Consommation théorique et réelle par semaine, et impact financier hebdomadaire"
+        aria-label={
+          'Consommation théorique et réelle par semaine, et ' +
+          (enValeur ? 'impact financier' : 'écart net') +
+          ' hebdomadaire'
+        }
         onMouseLeave={masquer}
       >
         <defs>
@@ -137,7 +161,7 @@ export function TendanceHebdo({
           const xGroupe = MARGES.gauche + index * pasX + (pasX - largeurGroupe) / 2
           const theorique = Number(semaine.conso_theorique)
           const reelle = Number(semaine.conso_reelle)
-          const impact = Number(semaine.ecart_valorise)
+          const impact = impactDe(semaine)
 
           const survol = (evenement: { clientX: number; clientY: number }) =>
             afficher(evenement, {
@@ -145,10 +169,12 @@ export function TendanceHebdo({
               lignes: [
                 { libelle: 'Théorique', valeur: nombre(theorique, 0), couleur: 'var(--serie-1)' },
                 { libelle: 'Réel', valeur: nombre(reelle, 0), couleur: 'var(--serie-2)' },
-                { libelle: 'Écart net', valeur: nombre(Number(semaine.ecart_net), 0) },
+                ...(enValeur
+                  ? [{ libelle: 'Écart net', valeur: nombre(Number(semaine.ecart_net), 0) }]
+                  : []),
                 {
-                  libelle: 'Impact',
-                  valeur: euro(impact, 0, true),
+                  libelle: enValeur ? 'Impact' : 'Écart',
+                  valeur: formaterImpact(impact),
                   couleur: impact >= 0 ? 'var(--pole-non-conso)' : 'var(--pole-surconso)',
                 },
                 { libelle: 'Lignes en écart', valeur: nombre(Number(semaine.nb_lignes_ecart), 0) },
@@ -239,7 +265,7 @@ export function TendanceHebdo({
           fontSize={9}
           fill="var(--encre-attenuee)"
         >
-          €
+          {uniteImpact}
         </text>
 
         {/* --- Axe des semaines --- */}

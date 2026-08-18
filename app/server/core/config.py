@@ -111,7 +111,13 @@ class Settings(BaseSettings):
         description="Nom du endpoint de serving utilisé par l'assistant.",
     )
     llm_max_tokens: int = 2_000
-    llm_temperature: float = 0.0
+    #: Température, ou ``None`` pour ne pas transmettre le paramètre.
+    #:
+    #: Tous les endpoints de fondation ne l'acceptent pas : les modèles Claude
+    #: récents servis par Databricks la refusent avec un ``400``. Le service
+    #: sait l'apprendre et la retirer tout seul, mais la rendre omissible par
+    #: configuration évite l'aller-retour perdu au démarrage de chaque worker.
+    llm_temperature: float | None = 0.0
     llm_max_tool_rounds: int = 5
     llm_enabled: bool = True
 

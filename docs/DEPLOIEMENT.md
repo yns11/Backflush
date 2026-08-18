@@ -484,13 +484,32 @@ s'arrête à la première qui bloque.
 | `client` | Le SDK n'arrive pas à construire un client de serving : ressource absente, ou identité de l'application non résolue | Attacher la ressource `serving-endpoint` (`resources/backflush_app.yml`), puis **recréer un déploiement** — les variables sont injectées à sa création |
 | `catalogue` — « le endpoint … n'existe pas » | Le nom configuré ne correspond à aucun endpoint de CET espace de travail. La réponse liste les endpoints visibles | Reprendre un nom de la liste dans la variable `llm_endpoint` du bundle, redéployer |
 | `appel` — `HTTP 403` / `401` | Le endpoint existe mais le principal de service ne peut pas l'interroger | Serving → le endpoint → Permissions → `Can Query` pour le principal de service de l'application |
-| `appel` — `HTTP 400` | Le fournisseur refuse un paramètre de la requête ; son message le nomme | Ajuster `LLM_MAX_TOKENS` ou `LLM_TEMPERATURE` dans `app.yaml` selon le message |
+| `appel` — `HTTP 400` | Le fournisseur refuse un paramètre de la requête ; son message le nomme | **Aucune action requise dans le cas courant** : l'application retire le paramètre et rejoue l'appel, une fois par redémarrage de worker (voir ci-dessous). N'intervenir que si le message nomme un paramètre hors de `temperature` / `top_p` / `max_tokens` |
 | `appel` — `HTTP 429` | Quota atteint sur un endpoint à la demande | Réessayer, ou basculer sur un endpoint provisionné |
 
 L'étape `catalogue` peut signaler « catalogue non consultable » sans être en
 échec : lister les endpoints et en interroger un sont deux droits distincts, et
 seul le second est nécessaire. Si l'étape `appel` aboutit, c'est sans
 conséquence.
+
+**Paramètres refusés par un endpoint.** Tous les modèles de fondation
+n'acceptent pas les mêmes réglages. `eu.anthropic.claude-opus-4-8`, par exemple,
+répond `400 — Model … does not support the temperature parameter` alors que le
+paramètre est parfaitement légitime ailleurs. Plutôt qu'une liste par modèle,
+fausse à la première montée de version, l'application **apprend du refus** :
+elle retire le paramètre nommé, rejoue l'appel, et le retient. Le journal en
+garde la trace ::
+
+    WARNING Le endpoint « … » refuse le paramètre « temperature » :
+            il est retiré des appels suivants.
+
+Le service étant un singleton applicatif, le coût est d'un aller-retour par
+redémarrage de worker — pas par question posée. Pour l'économiser, laisser
+`LLM_TEMPERATURE` vide dans `app.yaml` : le paramètre n'est alors jamais
+transmis. Seuls `temperature`, `top_p` et `max_tokens` sont retirables ; un
+refus portant sur autre chose remonte comme une erreur, ce qui est le
+comportement voulu — retirer un réglage sur un `400` quelconque dégraderait
+silencieusement tous les appels suivants.
 
 ## 8. Passage en production
 

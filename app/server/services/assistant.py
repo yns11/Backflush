@@ -237,6 +237,20 @@ class AssistantService:
         self._repository = repository
         self._settings = settings
         self._client: Any | None = None
+        #: Paramètres que CE endpoint a explicitement refusés.
+        #:
+        #: Les endpoints de fondation n'acceptent pas tous les mêmes réglages :
+        #: `eu.anthropic.claude-opus-4-8`, par exemple, rejette `temperature`
+        #: — un paramètre parfaitement légitime ailleurs, et que le client
+        #: OpenAI envoie sans broncher. Le refus est un `400` en bonne et due
+        #: forme, qui nomme le paramètre en cause.
+        #:
+        #: Plutôt que de figer une liste par modèle — qui serait fausse à la
+        #: première montée de version — le service APPREND du refus : il retire
+        #: le paramètre, rejoue l'appel, et retient la leçon. Le service étant
+        #: un singleton applicatif, le coût est d'un aller-retour par
+        #: redémarrage de worker, pas par question posée.
+        self._parametres_refuses: set[str] = set()
 
     # -- Client LLM --------------------------------------------------------
     def _openai(self) -> Any:
@@ -538,15 +552,37 @@ class AssistantService:
         un droit manquant ou un paramètre refusé ne se corrigent pas en
         réessayant, et l'utilisateur n'avait aucun moyen de le savoir.
         """
+        charge: dict[str, Any] = {
+            "model": self._settings.llm_endpoint,
+            "messages": messages,
+            "max_tokens": self._settings.llm_max_tokens,
+            **({"tools": definitions_outils(), "tool_choice": "auto"} if avec_outils else {}),
+        }
+        # `temperature` reste omissible par configuration (`LLM_TEMPERATURE`
+        # vide), en plus de l'être par apprentissage : sur un endpoint connu
+        # pour la refuser, autant ne jamais payer l'aller-retour.
+        if self._settings.llm_temperature is not None:
+            charge["temperature"] = self._settings.llm_temperature
+        for refuse in self._parametres_refuses:
+            charge.pop(refuse, None)
+
         try:
-            return client.chat.completions.create(
-                model=self._settings.llm_endpoint,
-                messages=messages,
-                temperature=self._settings.llm_temperature,
-                max_tokens=self._settings.llm_max_tokens,
-                **({"tools": definitions_outils(), "tool_choice": "auto"} if avec_outils else {}),
-            )
+            return client.chat.completions.create(**charge)
         except Exception as exc:
+            # Le fournisseur a-t-il nommé un paramètre qu'il ne supporte pas ?
+            # Si oui, on le retire et on rejoue UNE fois. La récursion est
+            # bornée : chaque tour ajoute un nom à un ensemble fini, et un
+            # paramètre déjà retiré ne peut plus être mis en cause.
+            refuse = _parametre_refuse(exc)
+            if refuse and refuse not in self._parametres_refuses:
+                self._parametres_refuses.add(refuse)
+                LOGGER.warning(
+                    "Le endpoint « %s » refuse le paramètre « %s » : il est retiré "
+                    "des appels suivants.",
+                    self._settings.llm_endpoint, refuse,
+                )
+                return self._appeler_modele(client, messages, avec_outils=avec_outils)
+
             cause = _cause_lisible(exc)
             # exc_info : la trace complète va dans les journaux de l'application,
             # où elle est consultable sans redéployer quoi que ce soit.
@@ -627,6 +663,42 @@ def _cause_lisible(exc: Exception) -> str:
     message = message or getattr(exc, "message", None) or str(exc)
     message = " ".join(str(message).split())[:400]
     return f"HTTP {statut} — {message}" if statut else message
+
+
+#: Paramètres facultatifs de la requête, qu'on sait retirer si le fournisseur
+#: les refuse. `messages` et `model` n'y figurent pas : sans eux il n'y a pas
+#: d'appel, et un refus les concernant est une erreur de code, pas de réglage.
+_PARAMETRES_FACULTATIFS: tuple[str, ...] = ("temperature", "top_p", "max_tokens")
+
+#: Formulations par lesquelles un fournisseur signale un paramètre non supporté.
+#: Volontairement restrictif : un `400` pour une autre raison — jeton de trop,
+#: message mal formé — ne doit PAS déclencher le retrait d'un paramètre, sous
+#: peine de dégrader silencieusement tous les appels suivants.
+_REFUS_DE_PARAMETRE = re.compile(
+    r"does not support|not supported|unsupported (?:parameter|value)|"
+    r"unrecognized (?:request )?argument",
+    re.I,
+)
+
+
+def _parametre_refuse(exc: Exception) -> str | None:
+    """Nom du paramètre que le fournisseur déclare ne pas supporter, s'il y en a.
+
+    Exemple réel, sur `eu.anthropic.claude-opus-4-8` ::
+
+        HTTP 400 — BAD_REQUEST: Model eu.anthropic.claude-opus-4-8 does not
+        support the temperature parameter.
+    """
+    if getattr(exc, "status_code", None) != 400:
+        return None
+    message = _cause_lisible(exc)
+    if not _REFUS_DE_PARAMETRE.search(message):
+        return None
+    minuscule = message.lower()
+    for nom in _PARAMETRES_FACULTATIFS:
+        if nom in minuscule:
+            return nom
+    return None
 
 
 def _remede_probable(exc: Exception) -> str:

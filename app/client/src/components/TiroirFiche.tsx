@@ -15,6 +15,7 @@ import { useQuery } from '@tanstack/react-query'
 import { api } from '@/api/client'
 import type { FicheComposant, FicheParent, Filtres } from '@/api/types'
 import { euro, nombre, valeurIndicateur } from '@/lib/format'
+import { useMesure } from '@/state/mesure'
 import { TendanceHebdo } from './charts/TendanceHebdo'
 import { EtatErreur, EtatVide, Squelette } from './Etats'
 
@@ -40,6 +41,10 @@ export function TiroirFiche({
   onFermer: () => void
   onFiltrerSur: (genre: 'composant' | 'parent', identifiant: string) => void
 }) {
+  // La fiche hérite de la mesure active : rouvrir une référence après avoir
+  // basculé en quantité ne doit pas rebasculer son graphique en euros.
+  const { enValeur } = useMesure()
+
   // Échap ferme le tiroir : attendu de tout panneau superposé.
   useEffect(() => {
     const surTouche = (evenement: KeyboardEvent) => {
@@ -149,7 +154,11 @@ export function TiroirFiche({
                 {donnees.semaines.length === 0 ? (
                   <EtatVide message="Aucun mouvement sur la période." />
                 ) : (
-                  <TendanceHebdo semaines={donnees.semaines} largeur={520} />
+                  <TendanceHebdo
+                    semaines={donnees.semaines}
+                    enValeur={enValeur}
+                    largeur={520}
+                  />
                 )}
               </section>
 

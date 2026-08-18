@@ -52,6 +52,8 @@ export function Synthese() {
    */
   const impactAbsolu = (ligne: { ecart_valorise_absolu: number; ecart_absolu: number }) =>
     Number(enValeur ? ligne.ecart_valorise_absolu : ligne.ecart_absolu)
+  /** Unité active, rappelée partout où un chiffre d'impact est légendé. */
+  const uniteImpact = enValeur ? '€' : 'unités'
 
   const indicateurs = useQuery({
     queryKey: ['indicateurs', filtres, mesure],
@@ -93,10 +95,13 @@ export function Synthese() {
     const derniere = semaines[semaines.length - 1]
     const precedente = semaines[semaines.length - 2]
     if (!derniere || !precedente) return undefined
-    const ecart = Number(derniere.ecart_valorise_absolu) - Number(precedente.ecart_valorise_absolu)
+    const ecart = impactAbsolu(derniere) - impactAbsolu(precedente)
     const sens = ecart >= 0 ? 'en hausse' : 'en baisse'
-    return `Dernière semaine ${sens} de ${euro(Math.abs(ecart), 0, true)} en impact absolu.`
-  }, [tendance.data])
+    return `Dernière semaine ${sens} de ${formaterImpact(Math.abs(ecart))} en impact absolu.`
+    // `impactAbsolu` et `formaterImpact` dépendent tous deux de la mesure : la
+    // phrase doit se recalculer à la bascule, sans quoi elle annoncerait des
+    // euros sous un axe en unités.
+  }, [tendance.data, impactAbsolu, formaterImpact])
 
   return (
     <div className="pile">
@@ -131,6 +136,9 @@ export function Synthese() {
       {indicateurs.data && (
         <ConcentrationCarte
           concentration={indicateurs.data.concentration}
+          // Le serveur calcule déjà la concentration dans la mesure demandée :
+          // seule son écriture restait figée en euros.
+          formater={formaterImpact}
           onVoirReferences={() => aller('references')}
         />
       )}
@@ -139,14 +147,19 @@ export function Synthese() {
         pliCle="synthese.tendance"
         titre="Tendance hebdomadaire"
         message={messageTendance}
-        aide="Panneau haut : quantités théorique et réelle. Panneau bas : impact financier signé."
+        aide={
+          'Panneau haut : quantités théorique et réelle. Panneau bas : ' +
+          (enValeur ? 'impact financier signé.' : 'écart net signé, en unités.')
+        }
         legende={
           <Legende
             items={[
               { libelle: 'Conso. théorique (référence)', couleur: 'var(--serie-1)', motif: true },
               { libelle: 'Conso. réelle (mesure)', couleur: 'var(--serie-2)' },
-              { libelle: 'Non-consommation (€)', couleur: 'var(--pole-non-conso)' },
-              { libelle: 'Surconsommation (€)', couleur: 'var(--pole-surconso)' },
+              // L'unité du panneau bas est rappelée dans la légende : elle
+              // change avec la bascule, comme l'axe.
+              { libelle: `Non-consommation (${uniteImpact})`, couleur: 'var(--pole-non-conso)' },
+              { libelle: `Surconsommation (${uniteImpact})`, couleur: 'var(--pole-surconso)' },
             ]}
           />
         }
@@ -162,6 +175,7 @@ export function Synthese() {
           {(donnees) => (
             <TendanceHebdo
               semaines={donnees.semaines}
+              enValeur={enValeur}
               onSelectionSemaine={(semaine) => {
                 modifier({ date_debut: semaine.semaine_debut, date_fin: semaine.semaine_debut })
                 aller('detail')
@@ -195,6 +209,7 @@ export function Synthese() {
           >
             {(donnees) => (
               <BarresDivergentes
+                formater={formaterImpact}
                 elements={donnees.lignes.map(
                   (ligne): ElementBarre => ({
                     cle: ligne.libelle,
@@ -243,6 +258,7 @@ export function Synthese() {
           >
             {(donnees) => (
               <BarresDivergentes
+                formater={formaterImpact}
                 elements={donnees.lignes.slice(0, 12).map(
                   (ligne): ElementBarre => ({
                     cle: ligne.libelle,
@@ -282,6 +298,7 @@ export function Synthese() {
           >
             {(donnees) => (
               <BarresDivergentes
+                formater={formaterImpact}
                 elements={donnees.lignes.slice(0, 12).map(
                   (ligne): ElementBarre => ({
                     cle: ligne.libelle,
@@ -318,6 +335,7 @@ export function Synthese() {
           >
             {(donnees) => (
               <BarresDivergentes
+                formater={formaterImpact}
                 elements={donnees.lignes.map(
                   (ligne): ElementBarre => ({
                     cle: `${ligne.child_itemid}§${ligne.parent_programme}`,
@@ -371,12 +389,12 @@ export function Synthese() {
                         <td>{ligne.libelle}</td>
                         <td className="droite">{nombre(Number(ligne.nb_lignes))}</td>
                         <td
-                          className={`droite${Number(ligne.ecart_valorise) < 0 ? ' cellule--negatif' : ''}`}
+                          className={`droite${impact(ligne) < 0 ? ' cellule--negatif' : ''}`}
                         >
-                          {euro(Number(ligne.ecart_valorise), 0, true)}
+                          {formaterImpact(impact(ligne))}
                         </td>
                         <td className="droite">
-                          {euro(Number(ligne.ecart_valorise_absolu), 0, true)}
+                          {formaterImpact(impactAbsolu(ligne))}
                         </td>
                       </tr>
                     ))}
@@ -395,22 +413,15 @@ export function Synthese() {
                       </td>
                       <td className="droite">
                         <strong>
-                          {euro(
-                            donnees.lignes.reduce((s, l) => s + Number(l.ecart_valorise), 0),
-                            0,
-                            true,
+                          {formaterImpact(
+                            donnees.lignes.reduce((s, l) => s + impact(l), 0),
                           )}
                         </strong>
                       </td>
                       <td className="droite">
                         <strong>
-                          {euro(
-                            donnees.lignes.reduce(
-                              (s, l) => s + Number(l.ecart_valorise_absolu),
-                              0,
-                            ),
-                            0,
-                            true,
+                          {formaterImpact(
+                            donnees.lignes.reduce((s, l) => s + impactAbsolu(l), 0),
                           )}
                         </strong>
                       </td>
@@ -444,9 +455,12 @@ function resumeIndicateurs(indicateurs: Indicateur[] | undefined): string {
 
 function ConcentrationCarte({
   concentration,
+  formater,
   onVoirReferences,
 }: {
   concentration: { nb_references: number; tete: number; impact_tete: number; part_tete_pct: number }
+  /** Mise en forme de l'impact, unité comprise. */
+  formater: (valeur: number) => string
   onVoirReferences: () => void
 }) {
   return (
@@ -455,9 +469,9 @@ function ConcentrationCarte({
       <span>
         Les <strong>{concentration.tete}</strong> premières références concentrent{' '}
         <strong>{pourcent(concentration.part_tete_pct)}</strong> de l'impact absolu (
-        {euro(concentration.impact_tete, 0, true)} sur {nombre(concentration.nb_references)}{' '}
-        références). Une analyse ABC classique : traiter la tête de liste règle l'essentiel du
-        montant.
+        {formater(concentration.impact_tete)} sur {nombre(concentration.nb_references)}{' '}
+        références). Une analyse ABC classique : traiter la tête de liste règle l'essentiel de
+        l'écart.
       </span>
       <button
         type="button"

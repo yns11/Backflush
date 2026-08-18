@@ -34,6 +34,7 @@ from app.server.main import app
 from app.server.services.assistant import (
     AssistantService,
     _cause_lisible,
+    _parametre_refuse,
     _remede_probable,
 )
 
@@ -169,6 +170,127 @@ class TestRemonteeDeLaCause:
         from app.server.core.errors import DonneesIndisponiblesError
 
         assert DonneesIndisponiblesError().detail is None
+
+
+class TestParametreRefuse:
+    """Un endpoint qui refuse un réglage ne doit pas mettre l'assistant à terre.
+
+    Cas réel rencontré en production : `eu.anthropic.claude-opus-4-8` répond
+    ``400 — Model … does not support the temperature parameter``. Le paramètre
+    est parfaitement légitime ailleurs, et le client OpenAI l'envoie sans
+    broncher. Le service doit apprendre le refus, pas le subir.
+    """
+
+    MESSAGE_REEL = (
+        "BAD_REQUEST: Model eu.anthropic.claude-opus-4-8 does not support "
+        "the temperature parameter."
+    )
+
+    def test_le_parametre_est_reconnu_dans_le_message_reel(self) -> None:
+        assert _parametre_refuse(ErreurFournisseur(400, self.MESSAGE_REEL)) == "temperature"
+
+    def test_un_400_ordinaire_ne_retire_aucun_parametre(self) -> None:
+        """Retirer un réglage sur un 400 quelconque dégraderait tous les appels."""
+        for message in (
+            "BAD_REQUEST: input is too long",
+            "invalid request: messages must not be empty",
+            "temperature must be between 0 and 1",
+        ):
+            assert _parametre_refuse(ErreurFournisseur(400, message)) is None, message
+
+    def test_seul_un_400_est_examine(self) -> None:
+        assert _parametre_refuse(ErreurFournisseur(404, self.MESSAGE_REEL)) is None
+        assert _parametre_refuse(ErreurFournisseur(500, self.MESSAGE_REEL)) is None
+
+    @staticmethod
+    def _client_pointilleux(interdits: set[str]) -> tuple[Any, list[dict]]:
+        """Client qui refuse les paramètres nommés, un message d'erreur à la fois."""
+        appels: list[dict] = []
+
+        class Client:
+            def __init__(self) -> None:
+                self.chat = self
+
+            @property
+            def completions(self) -> Any:
+                return self
+
+            def create(self, **kwargs: Any) -> Any:
+                appels.append(dict(kwargs))
+                for nom in sorted(interdits):
+                    if nom in kwargs:
+                        raise ErreurFournisseur(
+                            400, f"Model X does not support the {nom} parameter."
+                        )
+                return SimpleNamespace(
+                    choices=[SimpleNamespace(message=SimpleNamespace(content="ok"))]
+                )
+
+        return Client(), appels
+
+    def test_le_service_retire_le_parametre_et_rejoue(self) -> None:
+        client, appels = self._client_pointilleux({"temperature"})
+        service = AssistantService(repository=None, settings=Settings())  # type: ignore[arg-type]
+        service._client = client
+
+        reponse = service._appeler_modele(client, [{"role": "user", "content": "x"}])
+        assert reponse.choices[0].message.content == "ok"
+        assert len(appels) == 2, "Un seul rejeu attendu."
+        assert "temperature" in appels[0]
+        assert "temperature" not in appels[1]
+
+    def test_la_lecon_est_retenue_pour_les_appels_suivants(self) -> None:
+        """Le service est un singleton : le coût doit être d'UN aller-retour."""
+        client, appels = self._client_pointilleux({"temperature"})
+        service = AssistantService(repository=None, settings=Settings())  # type: ignore[arg-type]
+        service._client = client
+
+        service._appeler_modele(client, [{"role": "user", "content": "x"}])
+        service._appeler_modele(client, [{"role": "user", "content": "y"}])
+        assert len(appels) == 3, "Le deuxième appel ne doit plus tenter le paramètre."
+        assert "temperature" not in appels[2]
+
+    def test_plusieurs_refus_convergent_sans_boucler(self) -> None:
+        """La récursion est bornée : chaque tour retire un nom d'un ensemble fini."""
+        client, appels = self._client_pointilleux({"temperature", "max_tokens"})
+        service = AssistantService(repository=None, settings=Settings())  # type: ignore[arg-type]
+        service._client = client
+
+        reponse = service._appeler_modele(client, [{"role": "user", "content": "x"}])
+        assert reponse.choices[0].message.content == "ok"
+        assert len(appels) == 3
+        assert service._parametres_refuses == {"temperature", "max_tokens"}
+
+    def test_un_refus_persistant_finit_par_remonter(self) -> None:
+        """Sans paramètre à retirer, l'erreur doit sortir — jamais boucler."""
+        service = _service(ErreurFournisseur(400, "Model X does not support the frobnicator."))
+        with pytest.raises(AssistantIndisponibleError):
+            service._appeler_modele(service._client, [{"role": "user", "content": "x"}])
+
+    def test_une_temperature_absente_de_la_configuration_n_est_pas_transmise(self) -> None:
+        recu: dict[str, Any] = {}
+
+        class Client:
+            def __init__(self) -> None:
+                self.chat = self
+
+            @property
+            def completions(self) -> Any:
+                return self
+
+            def create(self, **kwargs: Any) -> Any:
+                recu.update(kwargs)
+                return SimpleNamespace(
+                    choices=[SimpleNamespace(message=SimpleNamespace(content="ok"))]
+                )
+
+        service = AssistantService(
+            repository=None,  # type: ignore[arg-type]
+            settings=Settings(llm_temperature=None),
+        )
+        service._client = Client()
+        service._appeler_modele(service._client, [{"role": "user", "content": "x"}])
+        assert "temperature" not in recu
 
 
 class TestDiagnostic:

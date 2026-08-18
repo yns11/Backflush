@@ -14,7 +14,6 @@
 
 import type { ReactNode } from 'react'
 
-import { euro } from '@/lib/format'
 import { barreHorizontale, graduations, useInfobulle } from './primitives'
 
 export interface ElementBarre {
@@ -40,13 +39,23 @@ export function BarresDivergentes({
   elements,
   largeur = 520,
   onSelection,
-  formater = (valeur: number) => euro(valeur, 0, true),
+  formater,
   libelleAxe,
 }: {
   elements: ElementBarre[]
   largeur?: number
   onSelection?: (element: ElementBarre) => void
-  formater?: (valeur: number) => string
+  /**
+   * Mise en forme des étiquettes de valeur, y compris l'unité.
+   *
+   * OBLIGATOIRE, et sans repli en euros. Le repli existait, et il a produit
+   * exactement le défaut qu'un défaut produit : les barres suivaient
+   * consciencieusement la bascule valeur/quantité, mais leurs étiquettes
+   * restaient libellées « k€ » — un graphique juste, légendé faux. Le composant
+   * ne peut pas connaître l'unité de ce qu'on lui donne ; il exige donc qu'on
+   * la lui dise, et l'oubli devient une erreur de compilation.
+   */
+  formater: (valeur: number) => string
   libelleAxe?: ReactNode
 }) {
   const { afficher, masquer, element: infobulle } = useInfobulle()

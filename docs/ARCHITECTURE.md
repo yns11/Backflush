@@ -334,6 +334,16 @@ Règles de notation appliquées :
 - **Tri par magnitude de la valeur encodée** : les barres montrent l'impact net
   signé, elles sont donc ordonnées par |impact net| — conserver l'ordre serveur
   (par impact absolu) produirait un classement visuellement incohérent.
+- **L'unité se déclare, elle ne se devine pas.** Un composant de graphique ne
+  peut pas savoir si les nombres qu'on lui passe sont des euros ou des pièces :
+  `BarresDivergentes` exige donc un `formater`, et `TendanceHebdo` un
+  `enValeur`, tous deux sans valeur par défaut. Le défaut qui existait — un
+  repli en euros — a produit exactement ce qu'un repli produit : des barres qui
+  suivaient fidèlement la bascule valeur/quantité, et des étiquettes qui
+  restaient libellées « k€ ». Un graphique juste et une légende fausse est le
+  pire des deux, parce qu'il ne se remarque pas. Rendre ces propriétés
+  obligatoires transforme l'oubli en erreur de compilation, ce qu'aucun test
+  d'affichage ne garantirait aussi complètement.
 
 ## 5. États obligatoires
 
