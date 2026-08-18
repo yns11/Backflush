@@ -373,6 +373,26 @@ def _assemble(
     }
 
 
+#: Cycle de vie D365 (`ProdStatus`) tel que traduit par `31_fact_ecart_of.sql`,
+#: avec le poids de chacun dans un parc réel : la quasi-totalité des ordres est
+#: clôturée, une poignée reste en cours. Un tirage uniforme donnerait un sixième
+#: d'OF « Créé », et masquerait le fait qu'un statut non terminé est l'exception
+#: — donc précisément le cas qu'on cherche quand on filtre là-dessus.
+#:
+#: Le booléen dit si l'ordre porte une date de clôture. Il ne s'invente pas :
+#: `finisheddate` n'est renseignée qu'à partir de la déclaration de fin, et la
+#: vue source ramène à NULL la sentinelle `1900-01-01` que D365 y écrit avant.
+STATUTS_OF_DEMO: tuple[tuple[str, int, bool], ...] = (
+    ("Créé", 1, False),
+    ("Estimé", 1, False),
+    ("Planifié", 1, False),
+    ("Lancé", 3, False),
+    ("Démarré", 4, False),
+    ("Déclaré terminé", 8, True),
+    ("Clôturé", 81, True),
+)
+
+
 def _ecarts_par_of(
     production_of, consommation_of, nomenclature, par_id, nom_par_parent,
     programme_par_parent, perimetre_par_parent, uniformite, seuil, now, rng,
@@ -400,6 +420,19 @@ def _ecarts_par_of(
         for (semaine, parent_id, child_id, prod_id) in consommation_of
     }
 
+    # Le statut est un attribut de l'ORDRE, pas de la ligne : tiré une fois par
+    # OF, puis relu. Tiré à chaque ligne, le même ordre apparaîtrait « Clôturé »
+    # sur un composant et « Lancé » sur un autre — et le filtre « Statut OF »
+    # renverrait des demi-ordres, un défaut qu'aucun total ne révélerait.
+    libelles = [libelle for libelle, _, _ in STATUTS_OF_DEMO]
+    poids = [poids for _, poids, _ in STATUTS_OF_DEMO]
+    cloture_par_statut = {libelle: cloture for libelle, _, cloture in STATUTS_OF_DEMO}
+    ofs = {prod_id for (_, _, prod_id) in production_of}
+    ofs |= {prod_id for (_, _, _, prod_id) in consommation_of}
+    statut_par_of = {
+        prod_id: rng.choices(libelles, weights=poids)[0] for prod_id in sorted(ofs)
+    }
+
     lignes: list[tuple[Any, ...]] = []
     for semaine, prod_id, parent_id, child_id in sorted(attendus | reels):
         coef = nomenclature.get((parent_id, child_id))
@@ -418,11 +451,14 @@ def _ecarts_par_of(
             if (semaine, parent_id, child_id, prod_id) not in consommation_of
             else "Nominal"
         )
+        statut_of = statut_par_of[prod_id]
         lignes.append((
             semaine, prod_id, parent_id, child_id, annee, num,
             f"BOM-{parent_id}",
-            datetime.combine(semaine + timedelta(days=6), datetime.min.time(), tzinfo=UTC),
-            rng.choice(["Déclaré fini", "Clôturé", "Lancé"]),
+            # Pas de date de clôture tant que l'ordre n'est pas déclaré terminé.
+            datetime.combine(semaine + timedelta(days=6), datetime.min.time(), tzinfo=UTC)
+            if cloture_par_statut[statut_of] else None,
+            statut_of,
             programme_par_parent[parent_id], perimetre,
             nom_par_parent[parent_id], "STATOR",
             enfant["item_name"], enfant["categorie"], enfant["std_unit"],
@@ -552,6 +588,11 @@ def _quality_rows(fact: list[tuple[Any, ...]], now: datetime) -> list[tuple[Any,
         # `test_grain_of` le vérifie plutôt que de s'en remettre à cette ligne.
         ("reconciliation_of_detail", "ERREUR", "Cohérence", 0,
          "Écart entre le total des écarts par OF et celui de la table de détail."),
+        # Les statuts du générateur sont pris dans STATUTS_OF_DEMO, qui est
+        # l'énumération traduite par 31_*. Zéro est donc la valeur juste, et
+        # non une valeur par défaut.
+        ("of_statut_inconnu", "ALERTE", "Référentiel", 0,
+         "Ordres de fabrication portant un statut D365 hors énumération traduite."),
     ]
     return [(nom, sev, dom, valeur, 0, valeur > 0, message, now)
             for nom, sev, dom, valeur, message in controles]

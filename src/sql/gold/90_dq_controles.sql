@@ -215,7 +215,23 @@ WITH controles AS (
 
     UNION ALL
 
-    -- 10. Réconciliation agrégat / détail : tolérance 0,01 € sur le total.
+    -- 10. Statut d'OF hors énumération connue.
+    --     `prod_statut` n'est pas qu'un libellé d'affichage : c'est la valeur
+    --     du filtre « Statut OF » de l'application, et c'est ce qui permet de
+    --     ne PAS instruire un écart porté par un OF encore en cours. Si D365
+    --     introduit une valeur que la traduction de `31_*` ne connaît pas, elle
+    --     ressort en « Inconnu (n) » : une alerte ici, plutôt qu'un statut muet
+    --     dans une liste de filtre.
+    SELECT
+        'of_statut_inconnu', 'ALERTE', 'Référentiel',
+        (SELECT COUNT(*) FROM {catalog}.{schema}.fact_ecart_of
+          WHERE prod_statut LIKE 'Inconnu (%'),
+        0,
+        'Des ordres de fabrication portent un statut D365 absent de l''énumération traduite par 31_fact_ecart_of.sql. Compléter la traduction : le filtre « Statut OF » de l''application expose ces valeurs telles quelles.'
+
+    UNION ALL
+
+    -- 11. Réconciliation agrégat / détail : tolérance 0,01 € sur le total.
     SELECT
         'reconciliation_agg_detail', 'ERREUR', 'Cohérence',
         CAST(

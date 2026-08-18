@@ -25,6 +25,38 @@ TypeEcart = Literal["Non-consommation", "Surconsommation", "Conforme"]
 #: Valeurs autorisées pour le statut de ligne (figé à l'ingestion).
 StatutLigne = Literal["Nominal", "Hors nomenclature", "Sans consommation"]
 
+#: Cycle de vie d'un ordre de fabrication D365 (`ProdStatus`), dans l'ORDRE du
+#: cycle et non dans l'ordre alphabétique.
+#:
+#: Sert à classer les options du filtre « Statut OF ». Un tri alphabétique
+#: donnerait « Annulé, Aucun, Clôturé, Créé, Démarré… » : une liste où l'on ne
+#: peut pas lire d'un coup d'œil ce qui est terminé et ce qui ne l'est pas,
+#: alors que c'est la seule question que ce filtre sert à poser.
+#:
+#: La liste est un ORDRE d'affichage, pas une contrainte de validation : un
+#: statut absent (valeur D365 non traduite, remontée par le contrôle
+#: `of_statut_inconnu`) reste sélectionnable et est simplement classé en fin.
+CYCLE_STATUT_OF: tuple[str, ...] = (
+    "Aucun",
+    "Créé",
+    "Estimé",
+    "Planifié",
+    "Lancé",
+    "Démarré",
+    "Déclaré terminé",
+    "Clôturé",
+    "Annulé",
+)
+
+
+def rang_statut_of(statut: str) -> tuple[int, str]:
+    """Clé de tri d'un statut d'OF : sa place dans le cycle, puis son libellé."""
+    try:
+        return (CYCLE_STATUT_OF.index(statut), "")
+    except ValueError:
+        return (len(CYCLE_STATUT_OF), statut)
+
+
 #: Longueur maximale d'un terme de recherche — borne le coût du trigramme.
 RECHERCHE_MAX = 80
 
@@ -88,6 +120,13 @@ class Filtres(BaseModel):
     parents: list[str] = Field(default_factory=list, max_length=LISTE_MAX)
     composants: list[str] = Field(default_factory=list, max_length=LISTE_MAX)
 
+    #: Axe de l'ordre de fabrication. Ces deux critères n'existent QUE sur
+    #: ``fact_ecart_of`` : la table de détail à la maille parent a perdu l'OF au
+    #: moment de son GROUP BY. :func:`construire_predicat` les ignore donc hors
+    #: de cette source — voir son paramètre ``axe_of``.
+    ofs: list[str] = Field(default_factory=list, max_length=LISTE_MAX)
+    statuts_of: list[str] = Field(default_factory=list, max_length=LISTE_MAX)
+
     recherche: str | None = Field(default=None, max_length=RECHERCHE_MAX)
 
     seuil_conformite: float = Field(
@@ -121,7 +160,10 @@ class Filtres(BaseModel):
         nettoye = valeur.strip()
         return nettoye or None
 
-    @field_validator("programmes", "perimetres", "categories", "parents", "composants")
+    @field_validator(
+        "programmes", "perimetres", "categories", "parents", "composants",
+        "ofs", "statuts_of",
+    )
     @classmethod
     def _nettoyer_liste(cls, valeurs: list[str]) -> list[str]:
         # Dédoublonnage en conservant l'ordre : un doublon allongerait le tableau
@@ -170,10 +212,26 @@ class Predicat:
     params: dict[str, Any]
 
 
-def construire_predicat(filtres: Filtres, alias: str = "f") -> Predicat:
+def construire_predicat(
+    filtres: Filtres, alias: str = "f", *, axe_of: bool = False
+) -> Predicat:
     """Traduit :class:`Filtres` en fragment SQL paramétré pour la table de détail.
 
-    :param alias: alias de ``fact_ecart_backflush`` dans la requête appelante.
+    :param alias: alias de la table de faits dans la requête appelante.
+    :param axe_of: la source lue porte-t-elle l'axe de l'ordre de fabrication ?
+
+    ``axe_of`` gouverne les deux critères ``ofs`` et ``statuts_of``, et rien
+    d'autre. Il vaut ``False`` par défaut parce que la source par défaut est
+    ``fact_ecart_backflush``, où les colonnes ``prod_id`` et ``prod_statut``
+    n'existent pas : les référencer y ferait échouer la requête avec une erreur
+    de colonne inconnue, sur des écrans qui n'ont rien demandé.
+
+    L'alternative — refuser la requête quand un filtre d'OF est posé hors de sa
+    source — a été écartée : la barre de filtres vide et grise ces deux critères
+    dès qu'on quitte la vue « Détail par OF », de sorte que le cas ne se produit
+    en pratique que si un lien partagé porte encore les paramètres. Une erreur
+    serait alors une impasse ; les ignorer laisse l'écran fonctionner, et
+    l'utilisateur voit que les deux champs sont vides.
     """
     conditions: list[str] = []
     params: dict[str, Any] = {
@@ -199,6 +257,16 @@ def construire_predicat(filtres: Filtres, alias: str = "f") -> Predicat:
         if champ:
             conditions.append(f"{alias}.{colonne} = ANY(%({cle})s)")
             params[cle] = list(champ)
+
+    # Axe OF : seulement là où les colonnes existent (cf. `axe_of`).
+    if axe_of:
+        for champ, colonne, cle in (
+            (filtres.ofs, "prod_id", "ofs"),
+            (filtres.statuts_of, "prod_statut", "statuts_of"),
+        ):
+            if champ:
+                conditions.append(f"{alias}.{colonne} = ANY(%({cle})s)")
+                params[cle] = list(champ)
 
     if filtres.types_ecart:
         conditions.append(f"({expression_type_ecart(alias)}) = ANY(%(types_ecart)s)")

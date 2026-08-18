@@ -286,6 +286,10 @@ textarea {
   border-left-color: var(--statut-critique);
 }
 
+.bandeau--attention {
+  border-left-color: var(--statut-attention);
+}
+
 .bandeau--info {
   border-left-color: var(--serie-1);
 }
@@ -1233,4 +1237,75 @@ textarea {
   .entete__sous-titre {
     display: none;
   }
+}
+
+/* Critère inopérant dans le contexte courant — les deux filtres d'OF hors de
+   la vue « Détail par OF ». Grisé ET vidé : le champ ne doit pas laisser croire
+   qu'une sélection subsiste quelque part. */
+.champ:disabled,
+.multi__declencheur:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  background: var(--plan);
+}
+
+/* --- Cellule d'écart cliquable (vue synthétique) ------------------------ */
+/* La cellule reste une cellule : pas de bouton visible, pas de couleur d'appel.
+   Ce qui signale l'action, c'est le soulignement pointillé — la convention du
+   terme défini, qui dit « il y a quelque chose derrière » sans transformer un
+   tableau de chiffres en tableau de liens. */
+.cellule-ouvrable {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  border-bottom: 1px dotted var(--bordure-forte);
+}
+
+.cellule-ouvrable:hover,
+.cellule-ouvrable:focus-visible {
+  color: var(--serie-1);
+  border-bottom-color: var(--serie-1);
+}
+
+/* --- Tiroir large : une grille complète y tient ------------------------- */
+/* Le tiroir de fiche fait 560 px, dimensionné pour une colonne de définitions.
+   Celui-ci porte la grille de détail par OF avec une dizaine de colonnes
+   chiffrées : à 560 px, elle serait entièrement à faire défiler et perdrait
+   l'usage — voir d'un coup d'œil si les écarts des semaines voisines se
+   compensent. */
+.tiroir--large {
+  width: min(1240px, 98vw);
+}
+
+.tiroir__bandeau {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--espace-2) var(--espace-4);
+  padding: var(--espace-3) var(--espace-4);
+  border-bottom: 1px solid var(--bordure);
+  background: var(--plan);
+  font-size: 12px;
+}
+
+.tiroir__fait {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tiroir__fait dt {
+  color: var(--encre-attenuee);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.tiroir__fait dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
 }

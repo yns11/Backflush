@@ -31,6 +31,8 @@ export const FILTRES_VIDES: Filtres = {
   statuts_ligne: [],
   parents: [],
   composants: [],
+  ofs: [],
+  statuts_of: [],
   recherche: null,
   seuil_conformite: 0.5,
   seuil_pct: null,
@@ -64,7 +66,28 @@ const CHAMPS_LISTE = [
   'statuts_ligne',
   'parents',
   'composants',
+  // Les deux critères d'OF sont sérialisés comme les autres : un lien partagé
+  // depuis la vue « Détail par OF » doit rouvrir la même sélection. La barre de
+  // filtres les vide dès qu'on quitte cette vue, de sorte qu'ils ne peuvent
+  // rester dans l'URL sans être visibles à l'écran.
+  'ofs',
+  'statuts_of',
 ] as const
+
+/**
+ * Un lien partagé porte-t-il un critère d'ordre de fabrication ?
+ *
+ * Sert à l'ouverture : ces deux critères n'ont d'effet que sur la vue « Détail
+ * par OF », et la barre de filtres les vide partout ailleurs. Sans cette
+ * question posée AVANT que l'écran ne se monte, un lien partagé depuis cette
+ * vue arriverait à la maille parent et se ferait immédiatement dépouiller de
+ * ce qu'il transportait.
+ */
+export function criteresOfDansUrl(): boolean {
+  if (typeof window === 'undefined') return false
+  const params = new URLSearchParams(window.location.search)
+  return Boolean(params.get('ofs') || params.get('statuts_of'))
+}
 
 export function FiltresProvider({
   children,

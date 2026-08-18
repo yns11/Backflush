@@ -30,14 +30,17 @@ import type {
   SemaineCalendrier,
 } from '@/api/types'
 import { EtatErreur, EtatVide, Squelette } from '@/components/Etats'
+import { TiroirContexteOf, type CelluleEcart } from '@/components/TiroirContexteOf'
 import { euro, nombre } from '@/lib/format'
 import { useFiltres } from '@/state/filtres'
 import { useMesure } from '@/state/mesure'
 
-/** Colonne de semaine : clé de tri stable et libellé court (S24). */
+/** Colonne de semaine : clé de tri stable, libellé court (S24), coordonnées. */
 interface Semaine {
   cle: string
   libelle: string
+  annee: number
+  numero: number
 }
 
 export function PerimetreSynthetique() {
@@ -47,6 +50,10 @@ export function PerimetreSynthetique() {
     occupe: false,
     erreur: null,
   })
+  // Cellule d'écart ouverte dans le tiroir de contexte, le cas échéant. L'état
+  // est local à l'écran : ouvrir une cellule ne change rien aux filtres
+  // globaux, qu'on retrouve intacts à la fermeture.
+  const [cellule_, setCellule] = useState<CelluleEcart | null>(null)
   const perimetre = filtres.perimetres.length === 1 ? filtres.perimetres[0] : null
 
   const requete = useQuery({
@@ -196,6 +203,17 @@ export function PerimetreSynthetique() {
                     ligne={ligne}
                     semaines={modele.semaines}
                     formater={formater}
+                    // Seul le bloc « écart » est cliquable : un chiffre de
+                    // production n'a pas de contrepartie à aller chercher — il
+                    // ne pose pas la question à laquelle le tiroir répond.
+                    onOuvrirCellule={(semaine) =>
+                      setCellule({
+                        perimetre,
+                        composant: ligne.reference,
+                        annee: semaine.annee,
+                        semaine: semaine.numero,
+                      })
+                    }
                   />
                 ))
               )}
@@ -203,6 +221,15 @@ export function PerimetreSynthetique() {
           </table>
         </div>
       </div>
+
+      {cellule_ && (
+        <TiroirContexteOf
+          cellule={cellule_}
+          filtres={filtres}
+          enValeur={enValeur}
+          onFermer={() => setCellule(null)}
+        />
+      )}
     </div>
   )
 }
@@ -221,10 +248,13 @@ function LigneCroisee({
   ligne,
   semaines,
   formater,
+  onOuvrirCellule,
 }: {
   ligne: LigneModele
   semaines: Semaine[]
   formater: (valeur: number) => string
+  /** Fourni sur le bloc « écart » seulement : rend les chiffres ouvrables. */
+  onOuvrirCellule?: (semaine: Semaine) => void
 }) {
   return (
     <tr>
@@ -233,12 +263,27 @@ function LigneCroisee({
       <td className="mono attenue">{ligne.complement}</td>
       {semaines.map((semaine) => {
         const valeur = ligne.valeurs[semaine.cle]
+        const texte = cellule(valeur, formater)
         return (
           <td
             key={semaine.cle}
             className={`droite${valeur !== undefined && valeur < 0 ? ' cellule--negatif' : ''}`}
           >
-            {cellule(valeur, formater)}
+            {/* Une cellule vide reste vide : offrir un bouton là où il n'y a
+                pas de chiffre donnerait un tiroir sans objet, et sèmerait des
+                cibles cliquables sur les trois quarts du tableau. */}
+            {onOuvrirCellule && texte ? (
+              <button
+                type="button"
+                className="cellule-ouvrable"
+                title={`Voir les ordres de fabrication derrière ce chiffre (${ligne.reference}, ${semaine.libelle}).`}
+                onClick={() => onOuvrirCellule(semaine)}
+              >
+                {texte}
+              </button>
+            ) : (
+              texte
+            )}
           </td>
         )
       })}
@@ -259,6 +304,11 @@ function libelleSemaine(annee: number, semaine: number): Semaine {
   return {
     cle: `${annee}-${String(semaine).padStart(2, '0')}`,
     libelle: `S${String(semaine).padStart(2, '0')}`,
+    // L'année et le numéro sont conservés, et pas seulement la clé composite :
+    // le tiroir de contexte interroge le serveur sur ce couple, et le
+    // redécouper depuis la clé serait une reconstruction fragile.
+    annee,
+    numero: semaine,
   }
 }
 

@@ -190,6 +190,8 @@ function ResumeFiltres() {
   ajouter('Catégorie', filtres.categories)
   ajouter('Parent', filtres.parents)
   ajouter('Composant', filtres.composants)
+  ajouter('OF', filtres.ofs)
+  ajouter('Statut OF', filtres.statuts_of)
   if (filtres.recherche) parts.push(`recherche « ${filtres.recherche} »`)
   if (filtres.exclure_conforme) parts.push('conformes exclues')
   if (filtres.coef_uniforme_uniquement) parts.push('coef. uniforme seulement')

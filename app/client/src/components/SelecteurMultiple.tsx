@@ -15,6 +15,8 @@ export function SelecteurMultiple({
   onChangement,
   placeholder = 'Tous',
   largeur,
+  desactive = false,
+  aide,
 }: {
   libelle: string
   options: string[]
@@ -22,6 +24,10 @@ export function SelecteurMultiple({
   onChangement: (valeurs: string[]) => void
   placeholder?: string
   largeur?: number
+  /** Grise le sélecteur : le critère n'a pas de sens dans le contexte courant. */
+  desactive?: boolean
+  /** Infobulle du déclencheur — c'est là qu'on explique un grisage. */
+  aide?: string
 }) {
   const [ouvert, setOuvert] = useState(false)
   const [recherche, setRecherche] = useState('')
@@ -50,6 +56,13 @@ export function SelecteurMultiple({
     return terme ? options.filter((option) => option.toLowerCase().includes(terme)) : options
   }, [options, recherche])
 
+  // Un sélecteur désactivé ne doit rien laisser d'ouvert derrière lui : sans
+  // cela, son panneau reste affiché et se laisse cocher alors que le critère
+  // est inopérant.
+  useEffect(() => {
+    if (desactive) setOuvert(false)
+  }, [desactive])
+
   const basculer = (option: string) => {
     onChangement(
       valeurs.includes(option) ? valeurs.filter((v) => v !== option) : [...valeurs, option],
@@ -76,6 +89,8 @@ export function SelecteurMultiple({
           aria-expanded={ouvert}
           aria-haspopup="listbox"
           aria-labelledby={`lbl-${libelle}`}
+          disabled={desactive}
+          title={aide}
         >
           <span className="multi__valeur">{resume}</span>
           {valeurs.length > 1 && <span className="multi__compteur">{valeurs.length}</span>}
@@ -84,7 +99,7 @@ export function SelecteurMultiple({
           </span>
         </button>
 
-        {ouvert && (
+        {ouvert && !desactive && (
           <div className="multi__panneau" role="listbox" aria-multiselectable="true">
             <input
               className="champ"

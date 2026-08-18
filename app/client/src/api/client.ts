@@ -8,6 +8,7 @@
 
 import type {
   CleGrille,
+  ContexteOf,
   FicheComposant,
   FicheParent,
   Filtres,
@@ -140,6 +141,21 @@ export const api = {
   /** Tableau croisé production × semaine et écart × semaine, pour UN périmètre. */
   synthesePerimetre: (filtres: Filtres, mesure: Mesure = 'quantite') =>
     poster<SynthesePerimetre>(`/api/analytique/synthese-perimetre?mesure=${mesure}`, filtres),
+
+  /**
+   * Ordres de fabrication derrière UNE cellule d'écart de la vue synthétique.
+   *
+   * N'envoie pas l'objet de filtres : le contexte doit montrer tous les ordres
+   * qui expliquent le chiffre, y compris ceux qu'un filtre global aurait
+   * écartés. Le serveur applique en revanche le paramétrage du référentiel,
+   * comme la vue synthétique elle-même.
+   */
+  contexteOf: (cellule: {
+    perimetre: string
+    composant: string
+    annee: number
+    semaine: number
+  }) => poster<ContexteOf>('/api/analytique/contexte-of', cellule),
 
   ficheComposant: (childItemId: string, filtres: Filtres) =>
     poster<FicheComposant>(

@@ -10,14 +10,34 @@ import { useEffect, useState } from 'react'
 
 import type { OptionsFiltres, StatutLigne, TypeEcart } from '@/api/types'
 import { useFiltres } from '@/state/filtres'
+import { useNavigation } from '@/state/navigation'
 import { SelecteurMultiple } from './SelecteurMultiple'
 
 const DELAI_RECHERCHE_MS = 300
 
+/** Infobulle des deux critères d'OF quand ils sont hors de leur seule vue utile. */
+const AIDE_HORS_AXE_OF =
+  "Ce critère n\u2019existe qu\u2019à la maille de l\u2019ordre de fabrication : " +
+  "activez « Par OF » sur l\u2019écran Détail. Les autres vues agrègent plusieurs " +
+  "ordres par ligne et n\u2019ont pas cette colonne."
+
 export function BarreFiltres({ options }: { options: OptionsFiltres | undefined }) {
   const { filtres, modifier, reinitialiser, nbCriteresActifs } = useFiltres()
+  const { page, detailParOf } = useNavigation()
   const [rechercheLocale, setRechercheLocale] = useState(filtres.recherche ?? '')
   const [avance, setAvance] = useState(false)
+
+  // Les deux critères d'OF ne portent que sur la vue « Détail par OF ». Partout
+  // ailleurs ils sont grisés — et VIDÉS, ce qui n'est pas la même chose : grisés
+  // seuls, ils resteraient dans l'URL et dans le compteur de critères actifs,
+  // et l'utilisateur croirait filtrer sur un OF qu'aucune requête n'applique.
+  const axeOfActif = page === 'detail' && detailParOf
+
+  useEffect(() => {
+    if (axeOfActif) return
+    if (filtres.ofs.length === 0 && filtres.statuts_of.length === 0) return
+    modifier({ ofs: [], statuts_of: [] })
+  }, [axeOfActif, filtres.ofs, filtres.statuts_of, modifier])
 
   // Synchronise le champ lorsque les filtres changent ailleurs (lien partagé,
   // réinitialisation, drill-through).
@@ -80,6 +100,31 @@ export function BarreFiltres({ options }: { options: OptionsFiltres | undefined 
         options={options?.statuts_ligne ?? []}
         valeurs={filtres.statuts_ligne}
         onChangement={(valeurs) => modifier({ statuts_ligne: valeurs as StatutLigne[] })}
+      />
+
+      <ChampListe
+        libelle="Numéro OF"
+        valeurs={filtres.ofs}
+        onChangement={(valeurs) => modifier({ ofs: valeurs })}
+        desactive={!axeOfActif}
+        placeholder="OF-… ; OF-…"
+        aide={
+          axeOfActif
+            ? 'Un ou plusieurs numéros d\u2019ordre, séparés par une virgule, un point-virgule ou un retour à la ligne. Correspondance exacte : le numéro d\u2019OF est un identifiant, pas un libellé.'
+            : AIDE_HORS_AXE_OF
+        }
+      />
+      <SelecteurMultiple
+        libelle="Statut OF"
+        options={options?.statuts_of ?? []}
+        valeurs={filtres.statuts_of}
+        onChangement={(valeurs) => modifier({ statuts_of: valeurs })}
+        desactive={!axeOfActif}
+        aide={
+          axeOfActif
+            ? "Où en est l\u2019ordre dans son cycle de vie D365. Un écart sur un ordre non terminé est attendu : il lui reste des mouvements à venir."
+            : AIDE_HORS_AXE_OF
+        }
       />
 
       <div className="filtres__actions">
@@ -201,6 +246,84 @@ export function BarreFiltres({ options }: { options: OptionsFiltres | undefined 
           </label>
         </div>
       )}
+    </div>
+  )
+}
+
+/**
+ * Saisie libre d'une liste d'identifiants — ici, des numéros d'ordre.
+ *
+ * Un `SelecteurMultiple` serait le réflexe, mais il suppose une liste d'options
+ * énumérable : sur un parc réel, les ordres de fabrication se comptent en
+ * dizaines de milliers. Les charger tous pour en cocher deux coûterait plus que
+ * la requête filtrée elle-même, et la liste resterait illisible.
+ *
+ * La correspondance est EXACTE : un numéro d'OF est un identifiant, pas un
+ * libellé. Une recherche partielle y renverrait des ordres sans rapport et
+ * ferait passer un filtre d'investigation pour un filtre de tri.
+ *
+ * Le champ garde son propre texte tant qu'il a le focus : normaliser à chaque
+ * frappe effacerait le séparateur que l'utilisateur vient de taper.
+ */
+function ChampListe({
+  libelle,
+  valeurs,
+  onChangement,
+  placeholder,
+  desactive = false,
+  aide,
+}: {
+  libelle: string
+  valeurs: string[]
+  onChangement: (valeurs: string[]) => void
+  placeholder?: string
+  desactive?: boolean
+  aide?: string
+}) {
+  const identifiant = `champ-liste-${libelle.replace(/\s+/g, '-').toLowerCase()}`
+  const [texte, setTexte] = useState(valeurs.join(' ; '))
+  const [saisie, setSaisie] = useState(false)
+
+  // Hors saisie, le champ reflète l'état : lien partagé, réinitialisation, ou
+  // vidage automatique quand on quitte la vue « Détail par OF ».
+  useEffect(() => {
+    if (!saisie) setTexte(valeurs.join(' ; '))
+  }, [valeurs, saisie])
+
+  const appliquer = (brut: string) => {
+    const liste = brut
+      .split(/[\s,;]+/)
+      .map((element) => element.trim())
+      .filter(Boolean)
+    // Comparaison sur le contenu : sans elle, chaque perte de focus réécrirait
+    // un tableau identique et relancerait toutes les requêtes de l'écran.
+    if (liste.join(' ') !== valeurs.join(' ')) onChangement(liste)
+  }
+
+  return (
+    <div className="filtres__groupe" style={{ width: 200 }}>
+      <label className="etiquette" htmlFor={identifiant}>
+        {libelle}
+        {valeurs.length > 1 && <span className="multi__compteur">{valeurs.length}</span>}
+      </label>
+      <input
+        id={identifiant}
+        className="champ"
+        type="text"
+        value={texte}
+        placeholder={placeholder}
+        disabled={desactive}
+        title={aide}
+        onFocus={() => setSaisie(true)}
+        onChange={(evenement) => setTexte(evenement.target.value)}
+        onBlur={(evenement) => {
+          setSaisie(false)
+          appliquer(evenement.target.value)
+        }}
+        onKeyDown={(evenement) => {
+          if (evenement.key === 'Enter') appliquer(evenement.currentTarget.value)
+        }}
+      />
     </div>
   )
 }

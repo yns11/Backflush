@@ -157,13 +157,32 @@ SELECT
     c.prod_id,
     pt.bom_id                                        AS prod_bomid,
     pt.date_cloture                                  AS prod_date_cloture,
-    -- Statut D365 : 4 = déclaré fini, 7 = clôturé financièrement. Un écart sur
-    -- un OF non terminé est normal — il lui reste des mouvements à venir. Le
-    -- distinguer évite de lancer une investigation sur un OF encore en cours.
-    CASE pt.prod_statut
-        WHEN 1 THEN 'Créé'      WHEN 2 THEN 'Estimé'  WHEN 3 THEN 'Lancé'
-        WHEN 4 THEN 'Déclaré fini' WHEN 5 THEN 'Terminé'
-        WHEN 7 THEN 'Clôturé'   ELSE 'Autre'
+
+    -- Statut D365 — énumération `ProdStatus`, dans l'ordre du cycle de vie :
+    --   0 Aucun · 1 Créé · 2 Estimé · 3 Planifié · 4 Lancé
+    --   5 Démarré · 6 Déclaré terminé · 7 Clôturé · 8 Annulé
+    --
+    -- L'échelle compte autant que les libellés : un écart sur un OF qui n'a
+    -- pas atteint « Déclaré terminé » est ATTENDU — il lui reste des mouvements
+    -- à venir. Ne pas lancer d'investigation dessus est la première règle de
+    -- lecture de cette table, et elle suppose de savoir où l'OF en est.
+    --
+    -- Les libellés ne sont pas décoratifs : ils sont la valeur du filtre
+    -- « Statut OF » de l'application. Une valeur inconnue est donc marquée
+    -- explicitement plutôt que fondue dans un « Autre » muet — le contrôle
+    -- `of_statut_inconnu` (90_*) la fait remonter si l'énumération évolue.
+    CASE
+        WHEN pt.prod_statut IS NULL THEN NULL
+        WHEN pt.prod_statut = 0 THEN 'Aucun'
+        WHEN pt.prod_statut = 1 THEN 'Créé'
+        WHEN pt.prod_statut = 2 THEN 'Estimé'
+        WHEN pt.prod_statut = 3 THEN 'Planifié'
+        WHEN pt.prod_statut = 4 THEN 'Lancé'
+        WHEN pt.prod_statut = 5 THEN 'Démarré'
+        WHEN pt.prod_statut = 6 THEN 'Déclaré terminé'
+        WHEN pt.prod_statut = 7 THEN 'Clôturé'
+        WHEN pt.prod_statut = 8 THEN 'Annulé'
+        ELSE CONCAT('Inconnu (', CAST(pt.prod_statut AS STRING), ')')
     END                                              AS prod_statut,
 
     -- Axe parent

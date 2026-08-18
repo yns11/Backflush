@@ -29,7 +29,12 @@ from app.server.data.faits import TABLE_ARTICLE_EXCLU as PARAM_EXCLUSION
 from app.server.data.faits import TABLE_DETAIL as FACT_DETAIL
 from app.server.data.faits import TABLE_NOMENCLATURE_PARAM as PARAM_NOMENCLATURE
 from app.server.domain.dictionary import GRILLES
-from app.server.domain.filters import Filtres, construire_predicat, expression_type_ecart
+from app.server.domain.filters import (
+    Filtres,
+    construire_predicat,
+    expression_type_ecart,
+    rang_statut_of,
+)
 from app.server.domain.metrics import AgregatBrut
 
 LOGGER = logging.getLogger("backflush.repository")
@@ -271,6 +276,18 @@ def source_de(cle: str) -> str:
     return SOURCE_PAR_GRILLE.get(cle, FACT)
 
 
+def porte_axe_of(cle: str) -> bool:
+    """La source de cette grille expose-t-elle ``prod_id`` et ``prod_statut`` ?
+
+    Gouverne les filtres « Numéro OF » et « Statut OF » : ailleurs, ces colonnes
+    n'existent pas et les référencer ferait échouer la requête. La réponse se
+    déduit de la table lue, jamais d'une liste de clés tenue à part — une grille
+    ajoutée sur la source par OF hériterait alors du filtre sans qu'on y pense,
+    et une grille retirée n'en garderait pas la trace.
+    """
+    return source_de(cle) is SOURCE_FAITS_OF
+
+
 class Repository:
     """Façade de lecture sur Lakebase."""
 
@@ -319,6 +336,15 @@ class Repository:
             "SELECT DISTINCT child_categorie AS valeur FROM fact_ecart_backflush "
             "WHERE child_categorie IS NOT NULL ORDER BY 1", {},
         )
+        # Statuts d'OF réellement présents, classés dans l'ordre du cycle de vie
+        # D365 et non par ordre alphabétique : la question posée à ce filtre est
+        # toujours « où en est l'ordre », jamais « comment s'appelle son statut ».
+        # Un statut non traduit (cf. contrôle `of_statut_inconnu`) reste dans la
+        # liste, en fin — le masquer rendrait ses lignes infiltrables.
+        statuts_of = self._fetch(
+            "SELECT DISTINCT prod_statut AS valeur FROM fact_ecart_of "
+            "WHERE prod_statut IS NOT NULL", {},
+        )
         bornes = self._fetch_one(
             "SELECT MIN(semaine_debut) AS debut, MAX(semaine_debut) AS fin "
             "FROM fact_ecart_backflush", {},
@@ -329,6 +355,9 @@ class Repository:
             "categories": [ligne["valeur"] for ligne in categories],
             "types_ecart": ["Non-consommation", "Surconsommation", "Conforme"],
             "statuts_ligne": ["Nominal", "Hors nomenclature", "Sans consommation"],
+            "statuts_of": sorted(
+                (ligne["valeur"] for ligne in statuts_of), key=rang_statut_of
+            ),
             "date_min": bornes.get("debut"),
             "date_max": bornes.get("fin"),
         }
@@ -524,7 +553,7 @@ class Repository:
         La quantité produite est dédoublonnée par (parent, semaine) avant
         sommation : elle est répétée sur chaque ligne de composant.
         """
-        predicat = construire_predicat(filtres)
+        predicat = construire_predicat(filtres, axe_of=porte_axe_of(cle))
         source = source_de(cle)
         # La quantité produite est portée par chaque ligne de composant : elle
         # est dédoublonnée sur la clé de production de la maille lue, faute de
@@ -628,6 +657,121 @@ class Repository:
             "semaines": self.semaines_periode(filtres),
         }
 
+    def contexte_of(
+        self,
+        *,
+        perimetre: str,
+        composant: str,
+        annee: int,
+        semaine: int,
+        max_ofs: int = 400,
+    ) -> dict[str, Any]:
+        """Ordres de fabrication derrière UNE cellule d'écart de la vue synthétique.
+
+        Une cellule du bloc « écart de prélèvement » vaut un périmètre, une
+        référence composant et une semaine. La question qu'elle pose est
+        toujours la même : cet écart est-il *résiduel*, ou n'est-il que le
+        décalage d'un OF à cheval sur deux semaines ? On ne peut y répondre
+        qu'en descendant à la maille de l'ordre, et en regardant AUSSI les
+        semaines voisines.
+
+        La réponse tient en deux ensembles :
+
+        1. **Les ordres.** Tous ceux qui ont mouvementé ce composant cette
+           semaine-là — côté consommation déclarée comme côté production
+           déclarée. Les deux cas remontent d'une seule requête parce que
+           ``fact_ecart_of`` naît d'une jointure complète : un OF qui a produit
+           sans consommer y a une ligne (théorique sans réel), un OF qui a
+           consommé sans produire aussi (réel sans théorique).
+        2. **Leurs semaines.** Toutes celles où ces mêmes ordres ont mouvementé
+           ce composant, et pas seulement celle du clic — c'est précisément ce
+           débordement qui distingue un écart résiduel d'un artefact de calage.
+
+        Aucun filtre utilisateur n'est appliqué ici, et c'est délibéré : un
+        « type d'écart » ou un « masquer les conformes » hérité de la barre
+        globale retirerait de la liste des ordres qui expliquent le chiffre, et
+        le tiroir répondrait faux à la seule question qu'on lui pose. Le
+        paramétrage du référentiel, lui, s'applique — il vient de la source
+        dérivée, et la vue synthétique compte déjà avec lui.
+
+        :param max_ofs: garde-fou. Au-delà, la liste est tronquée et
+            ``tronque`` le signale ; sans lui, une semaine anormale enverrait
+            des milliers d'identifiants dans un filtre ``IN``.
+        """
+        cle = {
+            "perimetre": perimetre,
+            "composant": composant,
+            "annee": annee,
+            "semaine": semaine,
+        }
+
+        ordres = self._fetch(f"""
+            SELECT DISTINCT f.prod_id
+            FROM {SOURCE_FAITS_OF} f
+            WHERE f.parent_perimetre = %(perimetre)s
+              AND f.child_itemid     = %(composant)s
+              AND f.annee            = %(annee)s
+              AND f.semaine          = %(semaine)s
+              AND f.prod_id IS NOT NULL
+            ORDER BY 1
+            LIMIT %(limite)s
+        """, {**cle, "limite": max_ofs + 1})
+        tronque = len(ordres) > max_ofs
+        prod_ids = [ligne["prod_id"] for ligne in ordres[:max_ofs]]
+
+        # La cellule cliquée elle-même, à la maille parent : le tiroir doit
+        # pouvoir afficher le chiffre d'où l'on vient. Sans lui, rien ne
+        # garantit à l'utilisateur qu'il regarde la bonne case.
+        origine = self._fetch_one(f"""
+            SELECT MAX(f.child_name)                            AS child_name,
+                   MAX(f.child_unite)                           AS child_unite,
+                   MIN(f.semaine_debut)                         AS semaine_debut,
+                   COALESCE(SUM(f.ecart_brut), 0)               AS ecart_brut,
+                   COALESCE(SUM(f.ecart_equivalent_produit), 0) AS ecart_equivalent_produit,
+                   COALESCE(SUM(f.ecart_valorise), 0)           AS ecart_valorise
+            FROM {FACT} f
+            WHERE f.parent_perimetre = %(perimetre)s
+              AND f.child_itemid     = %(composant)s
+              AND f.annee            = %(annee)s
+              AND f.semaine          = %(semaine)s
+        """, cle) or {}
+
+        semaines: list[dict[str, Any]] = []
+        if prod_ids:
+            semaines = self._fetch(f"""
+                SELECT DISTINCT f.semaine_debut, f.annee, f.semaine
+                FROM {SOURCE_FAITS_OF} f
+                WHERE f.prod_id      = ANY(%(prod_ids)s)
+                  AND f.child_itemid = %(composant)s
+                ORDER BY f.semaine_debut
+            """, {"prod_ids": prod_ids, "composant": composant})
+
+        return {
+            "perimetre": perimetre,
+            "composant": composant,
+            "child_name": origine.get("child_name"),
+            "child_unite": origine.get("child_unite"),
+            "annee": annee,
+            "semaine": semaine,
+            "semaine_debut": origine.get("semaine_debut"),
+            "ecart_brut": origine.get("ecart_brut"),
+            "ecart_equivalent_produit": origine.get("ecart_equivalent_produit"),
+            "ecart_valorise": origine.get("ecart_valorise"),
+            "ofs": prod_ids,
+            "tronque": tronque,
+            "semaines": semaines,
+            # Bornes prêtes à poser dans les filtres du tiroir. Repli sur la
+            # semaine cliquée si aucun ordre n'est trouvé : mieux vaut un tiroir
+            # qui montre une semaine vide qu'un tiroir sans bornes, qui
+            # ouvrirait tout l'historique.
+            "date_debut": (
+                semaines[0]["semaine_debut"] if semaines else origine.get("semaine_debut")
+            ),
+            "date_fin": (
+                semaines[-1]["semaine_debut"] if semaines else origine.get("semaine_debut")
+            ),
+        }
+
     # -- Grilles -----------------------------------------------------------
     def grille(
         self,
@@ -656,7 +800,7 @@ class Repository:
 
         taille = _borne(taille, 1, taille_max)
         page = max(1, page)
-        predicat = construire_predicat(filtres)
+        predicat = construire_predicat(filtres, axe_of=porte_axe_of(cle))
         params = {**predicat.params, "limite": taille, "decalage": (page - 1) * taille}
 
         # NULLS LAST systématique : une valeur manquante ne doit jamais occuper
@@ -703,7 +847,7 @@ class Repository:
         if sens not in ("asc", "desc"):
             raise RequeteInvalideError("Le sens de tri doit valoir « asc » ou « desc ».")
 
-        predicat = construire_predicat(filtres)
+        predicat = construire_predicat(filtres, axe_of=porte_axe_of(cle))
         params = {**predicat.params, "limite": _borne(limite, 1, 1_000_000), "decalage": 0}
         sql = _SQL_GRILLES[cle].format(
             fact=source_de(cle),

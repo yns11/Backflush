@@ -17,6 +17,8 @@ import {
   type ReactNode,
 } from 'react'
 
+import { criteresOfDansUrl } from './filtres'
+
 export const PAGES = {
   synthese: 'Synthèse',
   programmes: 'Programmes',
@@ -52,6 +54,17 @@ interface ContexteNavigation {
    */
   synthetique: boolean
   definirSynthetique: (actif: boolean) => void
+  /**
+   * Granularité de l'écran « Détail » : maille parent, ou maille OF.
+   *
+   * L'état vit ici, et non dans l'écran, parce qu'un AUTRE composant en dépend :
+   * la barre de filtres, qui n'est pas dans l'arbre du détail. Les critères
+   * « Numéro OF » et « Statut OF » n'ont de sens que sur la maille OF — ailleurs
+   * les colonnes n'existent pas — et la barre les vide et les grise en
+   * conséquence. Un état local à l'écran l'obligerait à deviner.
+   */
+  detailParOf: boolean
+  definirDetailParOf: (actif: boolean) => void
 }
 
 export interface OptionsNavigation {
@@ -72,6 +85,10 @@ export function NavigationProvider({ children }: { children: ReactNode }) {
   )
   const [fiche, setFiche] = useState<Fiche>(null)
   const [synthetique, setSynthetique] = useState(false)
+  // Un lien portant un filtre d'OF vient forcément de la maille OF : y arriver
+  // à la maille parent ferait vider ces critères par la barre de filtres, et le
+  // lien partagé n'ouvrirait pas ce qu'il décrivait.
+  const [detailParOf, setDetailParOf] = useState(criteresOfDansUrl)
 
   // Prise en charge des boutons Précédent / Suivant du navigateur.
   useEffect(() => {
@@ -96,8 +113,9 @@ export function NavigationProvider({ children }: { children: ReactNode }) {
     () => ({
       page, aller, fiche, ouvrirFiche, fermerFiche,
       synthetique, definirSynthetique: setSynthetique,
+      detailParOf, definirDetailParOf: setDetailParOf,
     }),
-    [page, aller, fiche, ouvrirFiche, fermerFiche, synthetique],
+    [page, aller, fiche, ouvrirFiche, fermerFiche, synthetique, detailParOf],
   )
 
   return <Contexte.Provider value={valeur}>{children}</Contexte.Provider>

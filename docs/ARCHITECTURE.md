@@ -191,7 +191,61 @@ les deux anomalies les plus coûteuses :
 | `Hors nomenclature` | Composant sorti sans ligne BOM | Erreur de saisie d'OF, nomenclature obsolète, substitution non tracée |
 | `Sans consommation` | Ligne BOM sans aucune sortie de la semaine | Backflush non exécuté, OF non clôturé |
 
-### 2.9 Performance
+### 2.9 La maille OF est une seconde lecture, jamais un axe de plus
+
+`fact_ecart_of` porte le même écart que `fact_ecart_backflush`, avec l'ordre de
+fabrication en plus. Le **total** est identique — descendre d'un cran ne crée ni
+ne détruit de matière — mais la **décomposition** diffère : non-consommation et
+surconsommation augmentent toutes deux du même montant, parce que le décalage
+des ordres à cheval sur deux semaines cesse de se compenser entre lancements.
+C'est le contrôle `reconciliation_of_detail` qui garde l'égalité des totaux.
+
+Trois conséquences de conception :
+
+* **Le basculement est explicite.** « Par parent » et « Par OF » sont deux
+  lectures qui ne donnent pas les mêmes chiffres ; ajouter l'OF d'office aurait
+  fait passer l'écart entre les deux écrans pour une incohérence.
+* **Les critères `ofs` et `statuts_of` sont cantonnés à leur source.**
+  `prod_id` et `prod_statut` n'existent pas sur la table à la maille parent :
+  `construire_predicat(..., axe_of=True)` ne les pose que là où ils existent, et
+  la barre de filtres les grise **et les vide** ailleurs. Grisés seuls, ils
+  resteraient dans l'URL et laisseraient croire à un filtrage inexistant.
+* **Le statut d'OF est une traduction, donc une dette.** `31_*` traduit
+  l'énumération D365 `ProdStatus` (0 Aucun → 8 Annulé). Une traduction fausse ne
+  casse rien : elle affiche « Clôturé » sur un ordre en cours et fait instruire
+  comme anomalie un écart parfaitement normal. Le contrôle `of_statut_inconnu`
+  remonte toute valeur non traduite plutôt que de la fondre dans un « Autre ».
+  Dans le même esprit, la vue source ramène à `NULL` la sentinelle `1900-01-01`
+  que D365 écrit dans `finisheddate` : laissée telle quelle, elle s'affiche
+  comme une vraie date de clôture, et tout test `IS NOT NULL` compte les ordres
+  en cours parmi les ordres terminés.
+
+### 2.10 Le tiroir de contexte : une parenthèse, pas une navigation
+
+Un chiffre du bloc « écart de prélèvement » de la vue synthétique vaut un
+périmètre, un composant et une semaine. Il pose toujours la même question : cet
+écart est-il *résiduel*, ou n'est-il que le décalage d'un ordre à cheval sur
+deux semaines ? Le tableau croisé ne peut pas y répondre — la contrepartie est
+dans la colonne d'à côté, mélangée à tous les autres ordres.
+
+Cliquer le chiffre ouvre donc une grille par OF filtrée sur quatre critères
+additifs : le périmètre, le composant, les ordres à l'origine des mouvements de
+cette semaine, et **toutes** les semaines où ces ordres ont mouvementé ce
+composant. Deux points de conception y sont contre-intuitifs mais nécessaires :
+
+* **Les filtres globaux de sélection ne sont pas repris** (seules les tolérances
+  le sont). Un « masquer les conformes » ou un type d'écart hérité de la barre
+  retirerait de la liste un ordre qui porte la contrepartie, et le tiroir
+  répondrait faux à la seule question qu'on lui pose.
+* **Les critères vivent dans le tiroir**, jamais dans l'objet de filtres global :
+  on retrouve son analyse intacte à la fermeture. C'est ce qui fait de ce
+  drill-down une parenthèse et non un déplacement.
+
+Le contexte est calculé côté serveur (`Repository.contexte_of`) : les deux côtés
+du mouvement — production déclarée et consommation déclarée — remontent d'une
+seule requête, parce que `fact_ecart_of` naît d'une jointure complète.
+
+### 2.11 Performance
 
 | Mécanisme | Effet |
 |---|---|
@@ -203,7 +257,7 @@ les deux anomalies les plus coûteuses :
 | `ANALYZE` avant la bascule | La première requête après ingestion planifie sur des statistiques fraîches |
 | Compression gzip des réponses | Une page de 500 lignes passe d'environ 400 ko à 80 ko |
 
-### 2.10 Chargement des `numeric` en flottant
+### 2.12 Chargement des `numeric` en flottant
 
 `psycopg.adapters.register_loader("numeric", FloatLoader)` — sérialisé en JSON,
 un `Decimal` devient une **chaîne**, que le frontend doit reconvertir à chaque

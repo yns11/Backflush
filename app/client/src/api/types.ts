@@ -30,6 +30,14 @@ export interface Filtres {
   statuts_ligne: StatutLigne[]
   parents: string[]
   composants: string[]
+  /**
+   * Axe de l'ordre de fabrication. N'a d'effet que sur la vue « Détail par
+   * OF » : la table de détail à la maille parent a perdu l'OF au moment de son
+   * agrégation. Ailleurs, le serveur les ignore et la barre de filtres les
+   * vide — voir `BarreFiltres`.
+   */
+  ofs: string[]
+  statuts_of: string[]
   recherche: string | null
   seuil_conformite: number
   seuil_pct: number | null
@@ -44,6 +52,8 @@ export interface OptionsFiltres {
   categories: string[]
   types_ecart: TypeEcart[]
   statuts_ligne: StatutLigne[]
+  /** Statuts d'OF présents, classés dans l'ordre du cycle de vie D365. */
+  statuts_of: string[]
   date_min: string | null
   date_max: string | null
   defauts: {
@@ -286,6 +296,31 @@ export interface SemaineCalendrier {
   semaine_debut: string
   annee: number
   semaine: number
+}
+
+/**
+ * Contexte d'investigation d'une cellule d'écart : les ordres de fabrication
+ * derrière le chiffre, et toutes les semaines où ils ont mouvementé ce
+ * composant. Le débordement au-delà de la semaine cliquée est l'information
+ * utile — c'est ce qui distingue un écart résiduel d'un décalage de calage.
+ */
+export interface ContexteOf {
+  perimetre: string
+  composant: string
+  child_name: string | null
+  child_unite: string | null
+  annee: number
+  semaine: number
+  semaine_debut: string | null
+  ecart_brut: number | null
+  ecart_equivalent_produit: number | null
+  ecart_valorise: number | null
+  ofs: string[]
+  /** Vrai si la liste d'OF a été écrêtée : le tiroir doit le dire. */
+  tronque: boolean
+  semaines: SemaineCalendrier[]
+  date_debut: string | null
+  date_fin: string | null
 }
 
 export interface SynthesePerimetre {

@@ -54,19 +54,33 @@ WHERE NOT COALESCE(ito.IsDelete, FALSE)
   AND ({company_predicate});
 
 -- --- Ordres de fabrication ---------------------------------------------------
--- `bomid` et `finisheddate` ne servent pas au calcul hebdomadaire actuel, mais
--- sont exposés ici : ce sont les deux colonnes qui rendront possible le
--- rapprochement par ordre de fabrication (cf. docs/AMELIORATIONS.md §1), lequel
--- supprimerait le biais de calage des OF à cheval sur deux semaines.
+-- `bomid` et `finisheddate` portent le rapprochement par ordre de fabrication
+-- (`31_fact_ecart_of.sql`), qui supprime le biais de calage des OF à cheval sur
+-- deux semaines.
+--
+-- SENTINELLE DE DATE — D365 n'écrit JAMAIS de NULL dans `finisheddate` : un OF
+-- non terminé porte `1900-01-01`, la « date zéro » de la plateforme. Laissée
+-- telle quelle, elle se propage jusqu'à l'écran comme une vraie date de
+-- clôture, et tout test de la forme `finisheddate IS NOT NULL` classe les OF
+-- en cours parmi les OF terminés. Elle est donc ramenée à NULL ICI, une fois
+-- pour toutes, plutôt que dans chaque requête aval.
+--
+-- Le seuil est `1901-01-01` et non l'égalité stricte à `1900-01-01` : selon le
+-- fuseau appliqué à la conversion, la sentinelle peut arriver décalée de
+-- quelques heures, donc au 31/12/1899. Aucun OF réel n'a de date antérieure à
+-- 1901, la borne est sans ambiguïté.
 CREATE OR REPLACE VIEW {catalog}.{schema}.v_src_prod_table
-COMMENT 'Ordres de fabrication (ProdTable) : rattache un OF à son article parent, hors OF supprimés.'
+COMMENT 'Ordres de fabrication (ProdTable) : rattache un OF à son article parent, hors OF supprimés. La sentinelle 1900-01-01 de finisheddate est ramenée à NULL.'
 AS
 SELECT
     CAST(pt.prodid       AS STRING)    AS prod_id,
     CAST(pt.itemid       AS STRING)    AS parent_itemid,
     CAST(pt.bomid        AS STRING)    AS bom_id,
     CAST(pt.prodstatus   AS BIGINT)    AS prod_statut,
-    CAST(pt.finisheddate AS TIMESTAMP) AS date_cloture,
+    CASE
+        WHEN CAST(pt.finisheddate AS TIMESTAMP) > TIMESTAMP '1901-01-01 00:00:00'
+        THEN CAST(pt.finisheddate AS TIMESTAMP)
+    END                                AS date_cloture,
     CAST(pt.dataareaid   AS STRING)    AS company
 FROM {bronze_catalog}.{bronze_schema}.prod_table AS pt
 WHERE NOT COALESCE(pt.IsDelete, FALSE)

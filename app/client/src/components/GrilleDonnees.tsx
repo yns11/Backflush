@@ -56,6 +56,9 @@ export function GrilleDonnees({
   onOuvrirFiche,
   onOuvrirPerimetre,
   hauteurSquelette = 10,
+  clePli,
+  triInitial,
+  sensInitial,
 }: {
   cle: CleGrille
   grille: Grille
@@ -66,9 +69,24 @@ export function GrilleDonnees({
   /** Absent sur la grille des périmètres : on y est déjà. */
   onOuvrirPerimetre?: (perimetre: string) => void
   hauteurSquelette?: number
+  /**
+   * Clé sous laquelle l'état plié/déplié est mémorisé, si elle doit différer de
+   * la grille. Deux instances d'une MÊME grille dans des contextes différents
+   * — l'écran de détail et le tiroir de contexte — se partageraient sinon un
+   * seul état : replier l'une replierait l'autre, sans rapport visible.
+   */
+  clePli?: string
+  /**
+   * Tri de départ, quand le tri par défaut de la grille ne sert pas la lecture
+   * du contexte. Le tri par défaut classe par impact, ce qui est juste pour
+   * chercher une anomalie et faux pour en suivre une : les semaines d'un même
+   * ordre s'y retrouvent dispersées dans la page.
+   */
+  triInitial?: string
+  sensInitial?: 'asc' | 'desc'
 }) {
-  const [tri, setTri] = useState<string>(grille.tri_defaut)
-  const [sens, setSens] = useState<'asc' | 'desc'>(grille.sens_defaut)
+  const [tri, setTri] = useState<string>(triInitial ?? grille.tri_defaut)
+  const [sens, setSens] = useState<'asc' | 'desc'>(sensInitial ?? grille.sens_defaut)
   const [page, setPage] = useState(1)
   const [taille, setTaille] = useState(50)
   const [selection, setSelection] = useState<Set<string>>(new Set())
@@ -81,7 +99,7 @@ export function GrilleDonnees({
   const zoneDefilement = useRef<HTMLDivElement>(null)
   // Une grille repliée laisse sa barre d'outils et son compteur visibles : on
   // sait ce qu'on a masqué, et on peut toujours exporter sans rouvrir.
-  const { ouvert, basculer } = usePli(`grille.${cle}`, true)
+  const { ouvert, basculer } = usePli(clePli ?? `grille.${cle}`, true)
 
   // Un changement de filtre invalide la pagination ET la sélection : garder des
   // lignes cochées qui ne sont plus dans le périmètre produirait un export ou

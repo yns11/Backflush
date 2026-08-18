@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Literal
 
 from fastapi import APIRouter, Body
+from pydantic import BaseModel, Field
 
 from app.server.api.deps import RepositoryDep
 from app.server.core.errors import RequeteInvalideError
@@ -101,6 +102,38 @@ def synthese_perimetre(
         )
     return {"perimetre": filtres.perimetres[0], "mesure": mesure,
             **depot.synthese_perimetre(filtres, mesure)}
+
+
+class DemandeContexteOf(BaseModel):
+    """Coordonnées d'une cellule du bloc « écart de prélèvement »."""
+
+    perimetre: str = Field(min_length=1, max_length=200)
+    composant: str = Field(min_length=1, max_length=200)
+    annee: int = Field(ge=2000, le=2100)
+    semaine: int = Field(ge=1, le=53)
+
+
+@routeur.post("/contexte-of", summary="Ordres de fabrication derrière une cellule d'écart")
+def contexte_of(depot: RepositoryDep, demande: DemandeContexteOf = Body(...)) -> dict:
+    """Contexte d'investigation d'un chiffre d'écart de la vue synthétique.
+
+    Renvoie les ordres de fabrication à l'origine des mouvements de la semaine
+    sur ce composant, et l'étendue des semaines où ces mêmes ordres l'ont
+    mouvementé. C'est ce second ensemble qui répond à la question posée : un
+    écart isolé sur une semaine unique est résiduel ; le même écart accompagné
+    d'un écart opposé la semaine voisine, sur les mêmes ordres, n'est qu'un
+    décalage de calage.
+
+    La route ne prend PAS l'objet de filtres global : voir
+    :meth:`Repository.contexte_of` — un filtre de sélection hérité de la barre
+    retirerait des ordres qui expliquent le chiffre.
+    """
+    return depot.contexte_of(
+        perimetre=demande.perimetre,
+        composant=demande.composant,
+        annee=demande.annee,
+        semaine=demande.semaine,
+    )
 
 
 @routeur.post("/composant/{child_itemid}", summary="Fiche complète d'un composant")

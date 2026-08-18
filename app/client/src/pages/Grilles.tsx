@@ -37,7 +37,10 @@ export function PageDetail({
 }: {
   onAnalyseIA: (question: string, reponse: ReponseAssistant) => void
 }) {
-  const [parOf, setParOf] = useState(false)
+  // La granularité vit dans l'état de navigation, pas ici : la barre de filtres
+  // en dépend pour activer ou griser les critères « Numéro OF » et
+  // « Statut OF », et elle n'est pas dans l'arbre de cet écran.
+  const { detailParOf: parOf, definirDetailParOf: setParOf } = useNavigation()
 
   return (
     <div className="pile">
