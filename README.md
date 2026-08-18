@@ -63,6 +63,7 @@ Dynamics 365 F&O
 Le détail des choix de conception est dans [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 La procédure de déploiement est dans [`docs/DEPLOIEMENT.md`](docs/DEPLOIEMENT.md).
 Les 20 axes d'amélioration priorisés sont dans [`docs/AMELIORATIONS.md`](docs/AMELIORATIONS.md).
+Le guide d'intégration des écarts aux campagnes d'inventaire est dans [`docs/BACKFLUSH_CAMPAGNES_INVENTAIRE.md`](docs/BACKFLUSH_CAMPAGNES_INVENTAIRE.md).
 
 ---
 
