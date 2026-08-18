@@ -43,6 +43,17 @@ def etat(settings: SettingsDep) -> dict:
     }
 
 
+@routeur.get("/diagnostic", summary="Pourquoi l'assistant ne répond pas")
+def diagnostic(assistant: AssistantDep) -> dict:
+    """Vérifie la chaîne complète : client, existence du endpoint, appel réel.
+
+    Répond toujours en 200, y compris — surtout — quand tout échoue : un
+    diagnostic qui remonte lui-même une erreur 503 n'aurait rien diagnostiqué.
+    Le verdict de chaque étape est dans le corps de la réponse.
+    """
+    return assistant.diagnostic()
+
+
 @routeur.post("/chat", summary="Dialogue outillé sur les données backflush")
 def chat(assistant: AssistantDep, requete: RequeteChat = Body(...)) -> ReponseAssistant:
     return assistant.repondre(requete.messages, requete.filtres, requete.page_active)

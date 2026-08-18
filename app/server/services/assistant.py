@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import Callable, Iterable
 from datetime import date, datetime
 from decimal import Decimal
@@ -31,7 +32,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from app.server.core.config import Settings
-from app.server.core.errors import AssistantIndisponibleError
+from app.server.core.errors import AssistantIndisponibleError, BackflushError
 from app.server.data.repository import Repository
 from app.server.domain.dictionary import GRILLES, contexte_metier
 from app.server.domain.filters import Filtres
@@ -249,10 +250,11 @@ class AssistantService:
 
             self._client = WorkspaceClient().serving_endpoints.get_open_ai_client()
         except Exception as exc:
-            LOGGER.error("Client de serving indisponible : %s", exc)
+            LOGGER.error("Client de serving indisponible : %s", exc, exc_info=True)
             raise AssistantIndisponibleError(
                 "Impossible de joindre le endpoint de serving. Vérifiez la ressource "
-                "« serving endpoint » de l'application et les droits du principal de service."
+                "« serving endpoint » de l'application et les droits du principal de service.",
+                detail=_cause_lisible(exc),
             ) from exc
         return self._client
 
@@ -431,8 +433,111 @@ class AssistantService:
             modele=self._settings.llm_endpoint,
         )
 
+    # -- Diagnostic --------------------------------------------------------
+    def diagnostic(self) -> dict[str, Any]:
+        """Pourquoi l'assistant ne répond pas — en une réponse, pas en un ticket.
+
+        Une panne d'assistant a presque toujours une cause de configuration, et
+        toutes ces causes se ressemblent vues de l'écran : le modèle ne répond
+        pas. Elles ne se ressemblent pas du tout une fois nommées — un endpoint
+        qui n'existe pas dans l'espace de travail, un principal de service sans
+        droit d'interrogation, un paramètre refusé par le fournisseur — et
+        chacune se corrige autrement.
+
+        Les trois étapes sont menées dans l'ordre où elles s'excluent, et la
+        suivante n'est tentée que si la précédente a tenu :
+
+        1. **client** — le SDK arrive-t-il à construire un client de serving ?
+        2. **catalogue** — le endpoint configuré figure-t-il parmi ceux que le
+           principal de service voit ? Les endpoints visibles sont retournés,
+           pour que la correction se fasse par copier-coller plutôt que de
+           mémoire.
+        3. **appel** — un appel minimal (quelques jetons, aucun outil) passe-t-il ?
+           C'est ce qui distingue « endpoint absent » de « endpoint présent mais
+           qui refuse notre requête ».
+
+        La route ne renvoie JAMAIS d'erreur HTTP : un diagnostic qui échoue en
+        503 n'aurait rien diagnostiqué. Chaque étape porte son propre verdict.
+        """
+        etapes: list[dict[str, Any]] = []
+
+        def etape(nom: str, ok: bool, **reste: Any) -> None:
+            etapes.append({"etape": nom, "ok": ok, **reste})
+
+        if not self._settings.llm_enabled:
+            etape("configuration", False,
+                  message="L'assistant est désactivé (LLM_ENABLED=false).")
+            return {"endpoint": self._settings.llm_endpoint, "ok": False, "etapes": etapes}
+
+        # 1) Client de serving
+        try:
+            client = self._openai()
+            etape("client", True, message="Client de serving construit.")
+        except Exception as exc:
+            etape("client", False, message=_cause_lisible(exc),
+                  remede="Vérifiez que la ressource « serving endpoint » est attachée à "
+                         "l'application et que le principal de service peut l'interroger.")
+            return {"endpoint": self._settings.llm_endpoint, "ok": False, "etapes": etapes}
+
+        # 2) Le endpoint configuré existe-t-il ?
+        attendu = self._settings.llm_endpoint
+        try:
+            from databricks.sdk import WorkspaceClient
+
+            noms = sorted(
+                point.name
+                for point in WorkspaceClient().serving_endpoints.list()
+                if point.name
+            )
+        except Exception as exc:
+            # Ne pas pouvoir LISTER n'empêche pas d'APPELER : le principal de
+            # service peut avoir le droit d'interroger sans celui d'énumérer.
+            # L'étape est donc informative, et le diagnostic continue.
+            etape("catalogue", True, message="Catalogue non consultable : " + _cause_lisible(exc),
+                  remede="Sans conséquence si l'appel ci-dessous aboutit.")
+        else:
+            proches = [nom for nom in noms if _RACINE_ENDPOINT.match(nom)]
+            if attendu in noms:
+                etape("catalogue", True, message=f"Le endpoint « {attendu} » existe.")
+            else:
+                etape(
+                    "catalogue", False,
+                    message=f"Le endpoint « {attendu} » n'existe pas dans cet espace de travail.",
+                    remede="Reprenez un nom de la liste ci-contre dans la variable "
+                           "LLM_ENDPOINT (app.yaml), puis redéployez l'application.",
+                    endpoints_disponibles=proches or noms[:40],
+                )
+
+        # 3) Appel minimal — sans outils, quelques jetons : on teste le lien,
+        #    pas le raisonnement.
+        try:
+            reponse = client.chat.completions.create(
+                model=attendu,
+                messages=[{"role": "user", "content": "ping"}],
+                max_tokens=16,
+            )
+            contenu = (reponse.choices[0].message.content or "").strip()
+            etape("appel", True, message=f"Le endpoint répond ({contenu[:60] or 'réponse vide'}).")
+        except Exception as exc:
+            etape("appel", False, message=_cause_lisible(exc),
+                  remede=_remede_probable(exc))
+
+        return {
+            "endpoint": attendu,
+            "ok": all(etape_["ok"] for etape_ in etapes),
+            "etapes": etapes,
+        }
+
     # -- Interne -----------------------------------------------------------
     def _appeler_modele(self, client: Any, messages: list[dict[str, Any]], *, avec_outils: bool = True):
+        """Un appel au endpoint de serving, dont l'échec reste diagnosticable.
+
+        Le message affiché nomme le endpoint et reprend la cause du fournisseur.
+        La version précédente disait « Le modèle n'a pas répondu. Réessayez dans
+        quelques instants. » quelle que soit la cause : un nom de endpoint faux,
+        un droit manquant ou un paramètre refusé ne se corrigent pas en
+        réessayant, et l'utilisateur n'avait aucun moyen de le savoir.
+        """
         try:
             return client.chat.completions.create(
                 model=self._settings.llm_endpoint,
@@ -442,9 +547,17 @@ class AssistantService:
                 **({"tools": definitions_outils(), "tool_choice": "auto"} if avec_outils else {}),
             )
         except Exception as exc:
-            LOGGER.error("Appel au modèle en échec : %s", exc)
+            cause = _cause_lisible(exc)
+            # exc_info : la trace complète va dans les journaux de l'application,
+            # où elle est consultable sans redéployer quoi que ce soit.
+            LOGGER.error(
+                "Appel au endpoint « %s » en échec : %s",
+                self._settings.llm_endpoint, cause, exc_info=True,
+            )
             raise AssistantIndisponibleError(
-                "Le modèle n'a pas répondu. Réessayez dans quelques instants."
+                f"Le endpoint « {self._settings.llm_endpoint} » n'a pas répondu. "
+                f"{_remede_probable(exc)}",
+                detail=cause,
             ) from exc
 
     @staticmethod
@@ -482,3 +595,70 @@ def _dumper_appel(appel: Any) -> dict[str, Any]:
         "type": "function",
         "function": {"name": appel.function.name, "arguments": appel.function.arguments},
     }
+
+
+#: Familles de endpoints de serving à proposer en priorité quand le nom
+#: configuré est introuvable. Une liste complète peut compter des dizaines
+#: d'entrées (modèles maison, embeddings) sans rapport avec le besoin.
+_RACINE_ENDPOINT = re.compile(r"^databricks-(claude|llama|gpt|gemma|mixtral|meta)", re.I)
+
+
+def _cause_lisible(exc: Exception) -> str:
+    """Réduit une exception de fournisseur à une phrase actionnable.
+
+    Le client OpenAI enveloppe la réponse HTTP : le code de statut et le message
+    du fournisseur y sont, mais noyés dans une représentation qui contient aussi
+    l'URL complète et les en-têtes. On extrait les deux éléments qui portent
+    l'information, et on borne la longueur — un pavé de mille caractères dans
+    une bulle de conversation n'est pas plus lisible qu'un silence.
+    """
+    # Nos propres erreurs sont déjà une lecture : les relire produirait
+    # « HTTP 503 — <notre message> », c'est-à-dire notre message enveloppé dans
+    # notre code de statut, et la cause d'origine — celle du SDK ou du
+    # fournisseur — serait perdue au profit de rien.
+    if isinstance(exc, BackflushError):
+        return exc.detail or exc.message
+
+    statut = getattr(exc, "status_code", None) or getattr(exc, "code", None)
+    corps = getattr(exc, "body", None)
+    message = None
+    if isinstance(corps, dict):
+        message = corps.get("message") or corps.get("error_code")
+    message = message or getattr(exc, "message", None) or str(exc)
+    message = " ".join(str(message).split())[:400]
+    return f"HTTP {statut} — {message}" if statut else message
+
+
+def _remede_probable(exc: Exception) -> str:
+    """Traduit un code de statut en geste de correction.
+
+    Les quatre codes qu'on rencontre ici ne se corrigent pas au même endroit, et
+    aucun ne se corrige en réessayant — ce que le message générique invitait
+    pourtant à faire.
+    """
+    statut = getattr(exc, "status_code", None)
+    if statut == 404:
+        return (
+            "Endpoint introuvable. Vérifiez LLM_ENDPOINT dans app/app.yaml : le nom "
+            "doit être celui d'un endpoint de CET espace de travail."
+        )
+    if statut in (401, 403):
+        return (
+            "Droits insuffisants. Le principal de service de l'application doit avoir "
+            "le privilège « Can Query » sur le endpoint (Serving → Permissions)."
+        )
+    if statut == 400:
+        return (
+            "Requête refusée par le fournisseur. Le message ci-dessus nomme le "
+            "paramètre en cause — le plus souvent max_tokens, temperature, ou "
+            "l'usage des outils, tous trois réglables dans les paramètres de "
+            "l'application."
+        )
+    if statut == 429:
+        return "Quota atteint. Réessayez, ou passez sur un endpoint provisionné."
+    if statut and statut >= 500:
+        return "Panne côté fournisseur. Là, réessayer a du sens."
+    return (
+        "Cause non reconnue. Le message ci-dessus vient du fournisseur ; "
+        "les journaux de l'application en portent la trace complète."
+    )

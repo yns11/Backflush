@@ -16,10 +16,22 @@ class BackflushError(Exception):
     #: Message affichable par l'interface (français, orienté utilisateur).
     message: str = "Une erreur interne est survenue."
 
-    def __init__(self, message: str | None = None) -> None:
+    def __init__(self, message: str | None = None, *, detail: str | None = None) -> None:
         super().__init__(message or self.message)
         if message:
             self.message = message
+        #: Cause technique, transmise à l'interface **quand elle est
+        #: actionnable et sans secret**.
+        #:
+        #: Le principe général du module — ne rien exposer de technique — vise
+        #: les erreurs de base de données, dont la cause ne dit rien à
+        #: l'utilisateur et peut révéler la structure. Les erreurs de
+        #: configuration du serving n'ont pas ce profil : « endpoint introuvable »
+        #: ou « paramètre refusé » sont exactement ce qu'un key-user doit lire
+        #: pour agir, et les taire transforme une panne d'une minute en ticket.
+        #: Le champ reste donc vide par défaut, et n'est renseigné que là où
+        #: l'appelant a jugé la cause diffusable.
+        self.detail = detail
 
 
 class ConfigurationError(BackflushError):
@@ -48,7 +60,13 @@ class RequeteInvalideError(BackflushError):
 
 
 class AssistantIndisponibleError(BackflushError):
-    """L'assistant IA n'est pas configuré ou le endpoint est injoignable."""
+    """L'assistant IA n'est pas configuré ou le endpoint est injoignable.
+
+    Porte volontairement un ``detail`` : la cause d'une panne d'assistant est
+    presque toujours une question de configuration — nom de endpoint, droits du
+    principal de service, paramètre refusé par le fournisseur — et c'est
+    l'utilisateur qui a la main dessus.
+    """
 
     status_code = 503
     message = "L'assistant IA est momentanément indisponible."

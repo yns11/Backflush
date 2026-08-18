@@ -392,3 +392,24 @@ export interface ResumeParametrage {
   lignes_desactivees: number
   lignes_corrigees: number
 }
+
+/**
+ * Résultat du diagnostic de l'assistant : une étape par cause possible, dans
+ * l'ordre où elles s'excluent. Chaque étape porte son propre verdict — un
+ * diagnostic n'a d'intérêt que s'il dit où la chaîne casse.
+ */
+export interface EtapeDiagnostic {
+  etape: string
+  ok: boolean
+  message: string
+  /** Geste de correction, quand l'étape a échoué. */
+  remede?: string
+  /** Noms de endpoints à reprendre, quand celui configuré est introuvable. */
+  endpoints_disponibles?: string[]
+}
+
+export interface DiagnosticAssistant {
+  endpoint: string
+  ok: boolean
+  etapes: EtapeDiagnostic[]
+}

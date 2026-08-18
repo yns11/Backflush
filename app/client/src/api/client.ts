@@ -9,6 +9,7 @@
 import type {
   CleGrille,
   ContexteOf,
+  DiagnosticAssistant,
   FicheComposant,
   FicheParent,
   Filtres,
@@ -57,6 +58,12 @@ export class ErreurApi extends Error {
     message: string,
     readonly statut: number,
     readonly type?: string,
+    /**
+     * Cause technique, quand le serveur a jugé utile de la transmettre.
+     * Présente sur les pannes de configuration — nom de endpoint, droits,
+     * paramètre refusé — absente sur les erreurs de données.
+     */
+    readonly detail?: string,
   ) {
     super(message)
     this.name = 'ErreurApi'
@@ -90,11 +97,11 @@ async function appeler<T>(chemin: string, options: RequestInit = {}): Promise<T>
       (corps && typeof corps === 'object' && 'erreur' in corps
         ? String((corps as { erreur: unknown }).erreur)
         : null) ?? `Erreur ${reponse.status}`
-    const type =
-      corps && typeof corps === 'object' && 'type' in corps
-        ? String((corps as { type: unknown }).type)
+    const lire = (cle: string): string | undefined =>
+      corps && typeof corps === 'object' && cle in corps
+        ? String((corps as Record<string, unknown>)[cle])
         : undefined
-    throw new ErreurApi(message, reponse.status, type)
+    throw new ErreurApi(message, reponse.status, lire('type'), lire('detail'))
   }
 
   return (await reponse.json()) as T
@@ -185,6 +192,8 @@ export const api = {
     appeler<{ actif: boolean; modele: string | null; tours_max: number; execution: string }>(
       '/api/assistant/etat',
     ),
+
+  diagnosticAssistant: () => appeler<DiagnosticAssistant>('/api/assistant/diagnostic'),
 
   suggestions: () => appeler<{ suggestions: string[] }>('/api/assistant/suggestions'),
 

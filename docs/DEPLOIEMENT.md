@@ -461,7 +461,7 @@ Puis, sur l'URL de l'application :
 | Interface absente, API fonctionnelle | `scripts/build_frontend.sh` non exécuté avant le déploiement, ou bloc `sync.include` retiré de `databricks.yml` | Compiler, vérifier que `sync.include` couvre `app/server/static/**`, redéployer |
 | L'application plante au démarrage | `psycopg` absent des dépendances | Vérifier `app/requirements.txt` |
 | Première requête lente après une période creuse | Instance Lakebase mise à l'échelle zéro | Attendu ; le pre-ping du pool absorbe le réveil |
-| Assistant en `503` | Ressource `serving-endpoint` absente, ou principal de service sans `CAN_QUERY` | Attacher la ressource, accorder le droit |
+| Assistant en `503`, ou bulle « le endpoint … n'a pas répondu » | Quatre causes possibles, qui ne se corrigent pas au même endroit | **`GET /api/assistant/diagnostic`** (ou le bouton « Diagnostiquer la connexion » sous la bulle d'erreur) : il teste le client, l'existence du endpoint et un appel réel, et nomme celle des quatre qui bloque — voir le tableau ci-dessous |
 | Job en échec sur `article_hors_referentiel` | Des composants mouvementés manquent dans `silver_base_article` | Corriger la source ; en dernier recours, `--no-fail-on-dq-error` pour débloquer, en sachant que les chiffres sont incomplets |
 | `relation "dim_coef_perimetre" does not exist`, ou colonne `parent_perimetre` inconnue | Le bundle a été déployé sans relancer le pipeline après la montée de version du modèle | `databricks bundle run backflush_pipeline` (§4) |
 | `relation "param_article_exclu" does not exist` sur les écrans de paramétrage | Le pipeline n'a pas été relancé depuis l'ajout de ces écrans : c'est lui qui crée les tables | `databricks bundle run backflush_pipeline` (§4) |
@@ -471,6 +471,26 @@ Puis, sur l'URL de l'application :
 | Les chiffres ne correspondent plus à ceux de Power BI | Un paramétrage est en vigueur : des références sont exclues ou des coefficients corrigés | `GET /api/parametrage/resume` en donne le décompte ; le détail est dans les écrans « Base article » et « Nomenclature » |
 | Tous les périmètres valent `NON RENSEIGNE` | `produits_fabriques.ligne_de_prod` vide, ou `ref_parent` ne correspond pas aux `item_id` des parents | Vérifier la source ; le contrôle `parent_sans_perimetre` de `dq_controles` le quantifie |
 | Le job gold échoue sur une colonne absente de `produits_fabriques` | Le contrat de colonnes attendu (`src/jobs/build_gold.py`, `COLONNES_SOURCE`) n'est pas satisfait | Aligner la source ou le contrat — l'échec au démarrage est délibéré, il vaut mieux qu'un modèle silencieusement faux |
+
+### Assistant : lire le diagnostic
+
+`GET /api/assistant/diagnostic` répond **toujours en 200**, y compris quand tout
+échoue : un diagnostic qui remonte lui-même une erreur n'aurait rien
+diagnostiqué. Il enchaîne trois étapes dans l'ordre où elles s'excluent, et
+s'arrête à la première qui bloque.
+
+| Étape en échec | Ce que cela veut dire | Correction |
+|---|---|---|
+| `client` | Le SDK n'arrive pas à construire un client de serving : ressource absente, ou identité de l'application non résolue | Attacher la ressource `serving-endpoint` (`resources/backflush_app.yml`), puis **recréer un déploiement** — les variables sont injectées à sa création |
+| `catalogue` — « le endpoint … n'existe pas » | Le nom configuré ne correspond à aucun endpoint de CET espace de travail. La réponse liste les endpoints visibles | Reprendre un nom de la liste dans la variable `llm_endpoint` du bundle, redéployer |
+| `appel` — `HTTP 403` / `401` | Le endpoint existe mais le principal de service ne peut pas l'interroger | Serving → le endpoint → Permissions → `Can Query` pour le principal de service de l'application |
+| `appel` — `HTTP 400` | Le fournisseur refuse un paramètre de la requête ; son message le nomme | Ajuster `LLM_MAX_TOKENS` ou `LLM_TEMPERATURE` dans `app.yaml` selon le message |
+| `appel` — `HTTP 429` | Quota atteint sur un endpoint à la demande | Réessayer, ou basculer sur un endpoint provisionné |
+
+L'étape `catalogue` peut signaler « catalogue non consultable » sans être en
+échec : lister les endpoints et en interroger un sont deux droits distincts, et
+seul le second est nécessaire. Si l'étape `appel` aboutit, c'est sans
+conséquence.
 
 ## 8. Passage en production
 

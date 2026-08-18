@@ -16,8 +16,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 
-import { api } from '@/api/client'
-import type { AppelOutil, Filtres, ReponseAssistant } from '@/api/types'
+import { api, ErreurApi } from '@/api/client'
+import type { AppelOutil, DiagnosticAssistant, Filtres, ReponseAssistant } from '@/api/types'
 import { EtatErreur } from './Etats'
 
 interface Echange {
@@ -25,6 +25,10 @@ interface Echange {
   contenu: string
   appels?: AppelOutil[]
   avertissement?: string
+  /** Cause technique renvoyée par le serveur, sur une panne de configuration. */
+  detail?: string
+  /** Marque une bulle d'échec : elle propose alors le diagnostic. */
+  echec?: boolean
 }
 
 export function Assistant({
@@ -42,6 +46,15 @@ export function Assistant({
   const [echanges, setEchanges] = useState<Echange[]>([])
   const [saisie, setSaisie] = useState('')
   const filRef = useRef<HTMLDivElement>(null)
+
+  // Le diagnostic n'est pas lancé au montage : il fait un vrai appel au
+  // endpoint, et le payer à chaque ouverture de l'écran pour un assistant qui
+  // fonctionne serait un coût pour rien. Il se déclenche à la demande.
+  const [diagnostic, setDiagnostic] = useState<DiagnosticAssistant | null>(null)
+  const sonde = useMutation({
+    mutationFn: api.diagnosticAssistant,
+    onSuccess: setDiagnostic,
+  })
 
   const etat = useQuery({ queryKey: ['assistant-etat'], queryFn: api.etatAssistant })
   const suggestions = useQuery({ queryKey: ['assistant-suggestions'], queryFn: api.suggestions })
@@ -77,6 +90,10 @@ export function Assistant({
             erreur instanceof Error
               ? erreur.message
               : "L'assistant n'a pas pu répondre. Réessayez dans quelques instants.",
+          // La cause technique est affichée telle quelle : sur une panne de
+          // configuration, c'est elle qui nomme le paramètre à corriger.
+          detail: erreur instanceof ErreurApi ? erreur.detail : undefined,
+          echec: true,
         },
       ])
     },
@@ -146,6 +163,17 @@ export function Assistant({
         )}
       </div>
 
+      {diagnostic && (
+        <PanneauDiagnostic diagnostic={diagnostic} onFermer={() => setDiagnostic(null)} />
+      )}
+      {sonde.isError && (
+        <div className="bandeau bandeau--critique" role="alert">
+          Le diagnostic lui-même n'a pas abouti :{' '}
+          {sonde.error instanceof Error ? sonde.error.message : 'cause inconnue'}. Cela désigne
+          l'application, pas le endpoint — consultez <code className="mono">/api/health</code>.
+        </div>
+      )}
+
       <div className="assistant__fil" ref={filRef}>
         {echanges.length === 0 && (
           <div className="attenue" style={{ maxWidth: '70ch' }}>
@@ -167,6 +195,20 @@ export function Assistant({
             className={`message message--${echange.role === 'user' ? 'utilisateur' : 'assistant'}`}
           >
             <div className="message__contenu">{echange.contenu}</div>
+            {echange.detail && (
+              <div className="message__cause mono">{echange.detail}</div>
+            )}
+            {echange.echec && (
+              <button
+                type="button"
+                className="bouton bouton--discret"
+                style={{ marginTop: 8 }}
+                disabled={sonde.isPending}
+                onClick={() => sonde.mutate()}
+              >
+                {sonde.isPending ? 'Diagnostic en cours…' : 'Diagnostiquer la connexion'}
+              </button>
+            )}
             {echange.appels && echange.appels.length > 0 && (
               <details className="message__trace">
                 <summary>
@@ -255,4 +297,63 @@ function resumeFiltres(filtres: Filtres): string {
   if (filtres.categories.length) morceaux.push(`catégories ${filtres.categories.join(', ')}`)
   if (filtres.composants.length) morceaux.push(`composants ${filtres.composants.join(', ')}`)
   return morceaux.length ? morceaux.join(' · ') : "tout l'historique disponible"
+}
+
+/**
+ * Résultat du diagnostic : une ligne par étape, dans l'ordre où elles
+ * s'excluent. La première en échec est la cause ; les suivantes n'ont pas été
+ * tentées ou n'ont plus de sens, et c'est pourquoi l'ordre est conservé tel que
+ * le serveur l'a produit plutôt que trié par gravité.
+ */
+function PanneauDiagnostic({
+  diagnostic,
+  onFermer,
+}: {
+  diagnostic: DiagnosticAssistant
+  onFermer: () => void
+}) {
+  return (
+    <div className="diagnostic" role="status">
+      <div className="rang">
+        <strong>
+          Diagnostic — endpoint <span className="mono">{diagnostic.endpoint}</span>
+        </strong>
+        <button
+          type="button"
+          className="bouton bouton--discret"
+          style={{ marginLeft: 'auto' }}
+          onClick={onFermer}
+        >
+          Masquer
+        </button>
+      </div>
+
+      <ol className="diagnostic__etapes">
+        {diagnostic.etapes.map((etape) => (
+          <li key={etape.etape} className={etape.ok ? '' : 'diagnostic--echec'}>
+            <span className="diagnostic__verdict" aria-hidden="true">
+              {etape.ok ? '✓' : '✕'}
+            </span>
+            <div>
+              <div className="diagnostic__nom">{etape.etape}</div>
+              <div>{etape.message}</div>
+              {etape.remede && <div className="attenue">{etape.remede}</div>}
+              {etape.endpoints_disponibles && etape.endpoints_disponibles.length > 0 && (
+                <details className="message__trace">
+                  <summary>
+                    {etape.endpoints_disponibles.length} endpoint(s) disponible(s) — voir la liste
+                  </summary>
+                  <ul className="mono">
+                    {etape.endpoints_disponibles.map((nom) => (
+                      <li key={nom}>{nom}</li>
+                    ))}
+                  </ul>
+                </details>
+              )}
+            </div>
+          </li>
+        ))}
+      </ol>
+    </div>
+  )
 }

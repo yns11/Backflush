@@ -118,13 +118,25 @@ async def journaliser_duree(request: Request, call_next):
 async def gerer_erreur_metier(_: Request, exc: BackflushError) -> JSONResponse:
     """Traduit une erreur applicative en réponse exploitable par l'interface.
 
-    Aucun détail technique n'est exposé : le message est rédigé pour un
-    utilisateur métier, la cause reste dans les journaux.
+    Le message est rédigé pour un utilisateur métier. Le champ ``detail``, lui,
+    n'est présent que si l'appelant l'a explicitement renseigné : les erreurs de
+    données n'en portent pas — leur cause technique ne dirait rien et exposerait
+    la structure — les erreurs de configuration si, parce que c'est
+    l'utilisateur qui peut les corriger.
     """
-    LOGGER.info("Erreur applicative %s : %s", exc.status_code, exc.message)
+    LOGGER.info(
+        "Erreur applicative %s : %s%s",
+        exc.status_code,
+        exc.message,
+        f" — {exc.detail}" if exc.detail else "",
+    )
     return JSONResponse(
         status_code=exc.status_code,
-        content={"erreur": exc.message, "type": type(exc).__name__},
+        content={
+            "erreur": exc.message,
+            "type": type(exc).__name__,
+            **({"detail": exc.detail} if exc.detail else {}),
+        },
     )
 
 
