@@ -275,6 +275,39 @@ class TestContexteOf:
         }
 
     @staticmethod
+    def _cellule_a_cheval(connexion) -> dict:
+        """Une cellule dont les ordres ont mouvementé le composant ailleurs.
+
+        C'est le cas que le tiroir existe pour éclairer, et le seul où la
+        scission en deux blocs a quelque chose à séparer.
+        """
+        with connexion.cursor() as cur:
+            cur.execute("""
+                WITH cellule AS (
+                    SELECT parent_perimetre, child_itemid, annee, semaine,
+                           array_agg(DISTINCT prod_id) AS ofs
+                    FROM fact_ecart_of
+                    GROUP BY parent_perimetre, child_itemid, annee, semaine
+                )
+                SELECT c.parent_perimetre, c.child_itemid, c.annee, c.semaine
+                FROM cellule c
+                JOIN fact_ecart_of f
+                  ON f.prod_id = ANY(c.ofs) AND f.child_itemid = c.child_itemid
+                GROUP BY c.parent_perimetre, c.child_itemid, c.annee, c.semaine
+                HAVING count(DISTINCT f.semaine_debut) > 1
+                ORDER BY 1, 2, 3, 4
+                LIMIT 1
+            """)
+            trouve = cur.fetchone()
+        if trouve is None:
+            pytest.skip("Aucun ordre à cheval sur deux semaines dans le jeu courant.")
+        perimetre, composant, annee, semaine = trouve
+        return {
+            "perimetre": perimetre, "composant": composant,
+            "annee": annee, "semaine": semaine,
+        }
+
+    @staticmethod
     def _contexte(client: TestClient, cellule: dict) -> dict:
         reponse = client.post("/api/analytique/contexte-of", json=cellule)
         assert reponse.status_code == 200, reponse.text
@@ -408,6 +441,80 @@ class TestContexteOf:
         assert reponse.status_code == 200
         # Le champ surnuméraire est simplement ignoré : la réponse est identique.
         assert reponse.json()["ofs"] == self._contexte(client, self._cellule(client))["ofs"]
+
+    def test_le_bloc_du_chiffre_se_somme_au_chiffre_clique(
+        self, client: TestClient
+    ) -> None:
+        """Propriété qui rend le tiroir vérifiable, et qui justifie la scission.
+
+        Le premier bloc du tiroir ne montre que la semaine cliquée ; le total de
+        son pied de page doit donc redonner EXACTEMENT l'écart affiché dans le
+        bandeau. Si les deux blocs se recouvraient — parce que la séparation
+        passerait par des bornes continues plutôt que par une liste énumérée de
+        semaines — cette égalité tomberait, et le tiroir montrerait un total qui
+        ne correspond à aucun chiffre de la vue synthétique.
+        """
+        cellule = self._cellule(client)
+        contexte = self._contexte(client, cellule)
+        semaine = next(
+            s for s in contexte["semaines"]
+            if s["annee"] == cellule["annee"] and s["semaine"] == cellule["semaine"]
+        )
+        page = client.post("/api/grilles/details_of", json={"filtres": {
+            "date_debut": semaine["semaine_debut"],
+            "date_fin": semaine["semaine_debut"],
+            "semaines_debut": [semaine["semaine_debut"]],
+            "perimetres": [cellule["perimetre"]],
+            "composants": [cellule["composant"]],
+            "ofs": contexte["ofs"],
+        }})
+        assert page.status_code == 200, page.text
+        assert page.json()["totaux"]["ecart_net"] == pytest.approx(
+            float(contexte["ecart_brut"])
+        )
+
+    def test_les_deux_blocs_sont_disjoints_et_couvrent_tout(
+        self, client: TestClient, connexion
+    ) -> None:
+        """Aucune ligne comptée deux fois, aucune perdue entre les deux blocs.
+
+        La cellule est choisie parmi celles dont les ordres DÉBORDENT sur une
+        autre semaine : sur une cellule à semaine unique, la propriété serait
+        vraie sans rien démontrer.
+        """
+        cellule = self._cellule_a_cheval(connexion)
+        contexte = self._contexte(client, cellule)
+        assert len(contexte["semaines"]) > 1
+
+        cliquee = [
+            s["semaine_debut"] for s in contexte["semaines"]
+            if s["annee"] == cellule["annee"] and s["semaine"] == cellule["semaine"]
+        ]
+        autres = [
+            s["semaine_debut"] for s in contexte["semaines"]
+            if s["semaine_debut"] not in cliquee
+        ]
+        assert autres, "La semaine cliquée ne peut pas être la seule ici."
+
+        base = {
+            "date_debut": contexte["date_debut"],
+            "date_fin": contexte["date_fin"],
+            "perimetres": [cellule["perimetre"]],
+            "composants": [cellule["composant"]],
+            "ofs": contexte["ofs"],
+        }
+
+        def total(semaines: list[str]) -> int:
+            reponse = client.post(
+                "/api/grilles/details_of",
+                json={"filtres": {**base, "semaines_debut": semaines}},
+            )
+            assert reponse.status_code == 200, reponse.text
+            return reponse.json()["total"]
+
+        assert total(cliquee) + total(autres) == total(cliquee + autres)
+        assert total(cliquee) > 0
+        assert total(autres) > 0
 
     def test_les_coordonnees_hors_bornes_sont_refusees(self, client: TestClient) -> None:
         reponse = client.post(

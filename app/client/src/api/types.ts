@@ -23,6 +23,14 @@ export type Mesure = 'valeur' | 'quantite'
 export interface Filtres {
   date_debut: string | null
   date_fin: string | null
+  /**
+   * Semaines retenues, désignées par leur lundi. Restriction énumérée, en
+   * complément des bornes : celles-ci décrivent un intervalle continu et ne
+   * savent pas exprimer « ces semaines-là, mais pas celle du milieu ». Utilisée
+   * par le tiroir de contexte pour séparer les lignes qui composent le chiffre
+   * cliqué de celles qui l'éclairent.
+   */
+  semaines_debut: string[]
   programmes: string[]
   perimetres: string[]
   categories: string[]

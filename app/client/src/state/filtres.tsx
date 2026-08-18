@@ -24,6 +24,9 @@ import type { Filtres, OptionsFiltres } from '@/api/types'
 export const FILTRES_VIDES: Filtres = {
   date_debut: null,
   date_fin: null,
+  // Absente de CHAMPS_LISTE, donc de l'URL : c'est une restriction posée par le
+  // tiroir de contexte, pas un critère que l'utilisateur choisit et partage.
+  semaines_debut: [],
   programmes: [],
   perimetres: [],
   categories: [],

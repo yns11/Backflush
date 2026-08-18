@@ -1309,3 +1309,35 @@ textarea {
   margin: 0;
   font-variant-numeric: tabular-nums;
 }
+
+/* Empilement resserré : un titre de section, son amorce et sa grille forment un
+   groupe, et doivent se lire comme tel — l'écart entre les DEUX groupes doit
+   rester plus grand que l'écart à l'intérieur d'un groupe. */
+.pile--serree {
+  gap: var(--espace-2);
+}
+
+/* Séparation des deux blocs du tiroir de contexte. Reprend la typographie des
+   intertitres du tableau croisé (« 1. PRODUCTION », « 2. ÉCART DE
+   PRÉLÈVEMENT ») : c'est le même geste de lecture, il doit se reconnaître. */
+.tiroir__section {
+  margin: 0;
+  padding-bottom: var(--espace-2);
+  border-bottom: 1px solid var(--bordure-forte);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--encre-secondaire);
+  text-transform: uppercase;
+}
+
+.tiroir__section .attenue {
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.tiroir__amorce {
+  margin: 0;
+  max-width: 95ch;
+}

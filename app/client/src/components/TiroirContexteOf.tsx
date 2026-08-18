@@ -68,8 +68,9 @@ export function TiroirContexteOf({
   const definitions = useQuery({ queryKey: ['grilles'], queryFn: api.grilles })
 
   const filtresLocaux = useMemo(
-    () => (contexte.data ? construireFiltresLocaux(filtres, contexte.data) : null),
-    [filtres, contexte.data],
+    () =>
+      contexte.data ? construireFiltresLocaux(filtres, contexte.data, cellule) : null,
+    [filtres, contexte.data, cellule],
   )
 
   const donnees = contexte.data
@@ -163,37 +164,96 @@ export function TiroirContexteOf({
               <p className="attenue" style={{ marginTop: 0, maxWidth: '95ch' }}>
                 {donnees.ofs.length === 0
                   ? "Aucun ordre de fabrication n'a mouvementé ce composant cette semaine-là sur ce périmètre."
-                  : "Toutes les lignes des ordres ci-dessous, sur toutes les semaines où ils ont mouvementé ce composant. " +
-                    "Une non-consommation d'une semaine annulée par une surconsommation de la précédente, sur les mêmes " +
-                    'ordres, est un décalage de calage et non de la matière manquante. Les filtres globaux de sélection ' +
-                    'ne sont pas repris ici — seules les tolérances le sont — pour qu’aucun ordre expliquant le ' +
-                    'chiffre ne soit masqué.'}
+                  : 'Les filtres globaux de sélection ne sont pas repris ici — seules les ' +
+                    'tolérances le sont — pour qu’aucun ordre expliquant le chiffre ne soit masqué.'}
               </p>
 
               {donnees.ofs.length === 0 ? (
                 <EtatVide message="Rien à instruire pour cette cellule." />
               ) : (
-                <GrilleDonnees
-                  // La clé lie l'instance à la cellule : deux ouvertures
-                  // successives sur deux cellules différentes doivent repartir
-                  // d'une pagination et d'une sélection neuves.
-                  key={`${cellule.perimetre}§${cellule.composant}§${cellule.annee}-${cellule.semaine}`}
-                  cle="details_of"
-                  grille={definitions.data.details_of}
-                  filtres={filtresLocaux}
-                  hauteurSquelette={8}
-                  // État de pliage propre au tiroir : replier la grille de
-                  // l'écran Détail ne doit pas replier celle-ci, et l'inverse.
-                  clePli="grille.contexte_of"
-                  // Par ordre, et non par impact. Le tri par impact est celui
-                  // qu'on veut pour CHERCHER une anomalie ; ici on en SUIT une,
-                  // et la lecture consiste à comparer les semaines d'un même
-                  // ordre. Classées par impact, elles se retrouvent dispersées
-                  // dans la page et la compensation devient invisible — ce que
-                  // le tiroir est précisément là pour montrer.
-                  triInitial="prod_id"
-                  sensInitial="asc"
-                />
+                <div className="pile">
+                  {/* BLOC 1 — ce qui FAIT le chiffre.
+                      Restreint à la semaine cliquée : le total de son pied de
+                      page se somme exactement à l'écart affiché dans le bandeau.
+                      C'est ce qui rend le tiroir vérifiable — on peut retrouver
+                      le chiffre d'où l'on vient, ligne à ligne. */}
+                  <section className="pile pile--serree">
+                    <h3 className="tiroir__section">
+                      1. Lignes du chiffre cliqué
+                      <span className="attenue"> — S{numeroSemaine(cellule.semaine)}</span>
+                    </h3>
+                    <p className="attenue tiroir__amorce">
+                      Les ordres qui ont mouvementé ce composant sur la semaine cliquée. Le
+                      total de ce bloc est le chiffre affiché ci-dessus.
+                    </p>
+                    <GrilleDonnees
+                      key={`${cleCellule(cellule)}§chiffre`}
+                      cle="details_of"
+                      grille={definitions.data.details_of}
+                      // Le titre de la carte porte la PORTÉE, pas le propos :
+                      // celui-ci est déjà dans l'intertitre juste au-dessus, et
+                      // le répéter ferait deux titres pour un seul bloc. Replié,
+                      // le bloc dit ainsi encore ce qu'il contient.
+                      titre={`Semaine S${numeroSemaine(cellule.semaine)}`}
+                      filtres={filtresLocaux.chiffre}
+                      hauteurSquelette={4}
+                      clePli="grille.contexte_of.chiffre"
+                      triInitial="prod_id"
+                      sensInitial="asc"
+                    />
+                  </section>
+
+                  {/* BLOC 2 — ce qui l'ÉCLAIRE.
+                      Les mêmes ordres, sur les autres semaines. Sa présence, ou
+                      son absence, EST la réponse à la question posée : un écart
+                      sans autre semaine est résiduel ; un écart de signe opposé
+                      la semaine voisine, sur les mêmes ordres, est un décalage
+                      de calage. */}
+                  <section className="pile pile--serree">
+                    <h3 className="tiroir__section">
+                      2. Autres semaines des mêmes ordres
+                      {autresSemaines(donnees, cellule).length > 0 && (
+                        <span className="attenue">
+                          {' — '}
+                          {autresSemaines(donnees, cellule)
+                            .map((semaine) => `S${numeroSemaine(semaine.semaine)}`)
+                            .join(' · ')}
+                        </span>
+                      )}
+                    </h3>
+                    {filtresLocaux.autres === null ? (
+                      <p className="attenue tiroir__amorce">
+                        Ces ordres n'ont mouvementé ce composant sur aucune autre semaine :
+                        l'écart ci-dessus n'a pas de contrepartie ailleurs, il est résiduel à
+                        cette maille.
+                      </p>
+                    ) : (
+                      <>
+                        <p className="attenue tiroir__amorce">
+                          Les mêmes ordres, sur les semaines voisines. Un écart de signe opposé
+                          ici annule celui du bloc 1 : c'est un décalage de calage, non de la
+                          matière manquante.
+                        </p>
+                        <GrilleDonnees
+                          key={`${cleCellule(cellule)}§autres`}
+                          cle="details_of"
+                          grille={definitions.data.details_of}
+                          titre={`Semaine${autresSemaines(donnees, cellule).length > 1 ? 's' : ''} ${autresSemaines(
+                            donnees,
+                            cellule,
+                          )
+                            .map((semaine) => `S${numeroSemaine(semaine.semaine)}`)
+                            .join(' · ')}`}
+                          filtres={filtresLocaux.autres}
+                          hauteurSquelette={4}
+                          clePli="grille.contexte_of.autres"
+                          triInitial="prod_id"
+                          sensInitial="asc"
+                        />
+                      </>
+                    )}
+                  </section>
+                </div>
               )}
             </>
           )}
@@ -203,8 +263,28 @@ export function TiroirContexteOf({
   )
 }
 
+/** Numéro de semaine sur deux chiffres, comme dans la vue synthétique. */
+function numeroSemaine(numero: number): string {
+  return String(numero).padStart(2, '0')
+}
+
+/** Identifiant stable d'une cellule — sert de clé de remontage aux grilles. */
+function cleCellule(cellule: CelluleEcart): string {
+  return `${cellule.perimetre}§${cellule.composant}§${cellule.annee}-${cellule.semaine}`
+}
+
+/** Les semaines du contexte autres que celle du clic. */
+function autresSemaines(contexte: ContexteOf, cellule: CelluleEcart) {
+  return contexte.semaines.filter(
+    (semaine) => !(semaine.annee === cellule.annee && semaine.semaine === cellule.semaine),
+  )
+}
+
 /**
- * Filtres du tiroir : quatre critères additifs, et rien d'autre.
+ * Filtres du tiroir : une base commune, scindée en deux blocs disjoints.
+ *
+ * La base porte quatre critères additifs — le périmètre, le composant, les
+ * ordres, et les semaines où ces ordres ont bougé.
  *
  * Ce qui est REPRIS des filtres globaux : les deux tolérances. Elles ne
  * sélectionnent aucune ligne, elles décident seulement de l'étiquette
@@ -215,14 +295,32 @@ export function TiroirContexteOf({
  * catégorie, recherche, impact minimum, exclusion des conformes, coefficient
  * uniforme, et les dates. Chacun de ces critères pourrait retirer une ligne
  * d'un ordre qui explique le chiffre, et le tiroir répondrait alors faux à la
- * seule question qu'on lui pose. Les dates, en particulier, sont REMPLACÉES par
- * l'étendue des semaines où les ordres ont bougé : c'est tout l'intérêt du
- * dispositif de sortir de la semaine cliquée.
+ * seule question qu'on lui pose.
+ *
+ * LA SCISSION. Les deux blocs ne répondent pas à la même question — l'un montre
+ * ce qui FAIT le chiffre, l'autre ce qui l'ÉCLAIRE — et ils doivent donc être
+ * disjoints : une ligne comptée deux fois casserait la propriété qui rend le
+ * tiroir vérifiable, à savoir que le total du bloc 1 est exactement le chiffre
+ * cliqué. La séparation passe par une liste ÉNUMÉRÉE de semaines et non par des
+ * bornes : la semaine du clic est le plus souvent au milieu de l'étendue, et un
+ * intervalle continu ne sait pas l'exclure.
+ *
+ * `autres` vaut `null` quand il n'y a pas d'autre semaine — et non un filtre
+ * vide, qui ne restreindrait rien et rejouerait tout le contexte dans le second
+ * bloc.
  */
-function construireFiltresLocaux(globaux: Filtres, contexte: ContexteOf): Filtres {
-  return {
+function construireFiltresLocaux(
+  globaux: Filtres,
+  contexte: ContexteOf,
+  cellule: CelluleEcart,
+): { chiffre: Filtres; autres: Filtres | null } {
+  const base: Filtres = {
+    // Les bornes restent posées sur l'étendue complète : elles bornent la
+    // requête là où la liste énumérée la précise. L'une sans l'autre suffirait ;
+    // les deux ensemble laissent le planificateur attaquer l'index de date.
     date_debut: contexte.date_debut,
     date_fin: contexte.date_fin,
+    semaines_debut: [],
     programmes: [],
     perimetres: [contexte.perimetre],
     categories: [],
@@ -238,5 +336,27 @@ function construireFiltresLocaux(globaux: Filtres, contexte: ContexteOf): Filtre
     impact_min: null,
     coef_uniforme_uniquement: false,
     exclure_conforme: false,
+  }
+
+  const semaineCliquee = contexte.semaines.find(
+    (semaine) => semaine.annee === cellule.annee && semaine.semaine === cellule.semaine,
+  )
+  const autres = autresSemaines(contexte, cellule)
+
+  return {
+    chiffre: {
+      ...base,
+      // Repli sur la borne basse si la semaine cliquée n'est pas dans la liste :
+      // le cas ne se produit que si la cellule ne porte aucun mouvement, et le
+      // bloc doit alors sortir vide, non montrer tout le contexte.
+      semaines_debut: [semaineCliquee?.semaine_debut ?? contexte.date_debut ?? ''].filter(
+        Boolean,
+      ),
+      date_debut: semaineCliquee?.semaine_debut ?? base.date_debut,
+      date_fin: semaineCliquee?.semaine_debut ?? base.date_fin,
+    },
+    autres: autres.length
+      ? { ...base, semaines_debut: autres.map((semaine) => semaine.semaine_debut) }
+      : null,
   }
 }

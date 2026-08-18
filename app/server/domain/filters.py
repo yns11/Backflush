@@ -110,6 +110,20 @@ class Filtres(BaseModel):
     date_debut: date | None = None
     date_fin: date | None = None
 
+    #: Semaines retenues, désignées par leur lundi. Restriction ÉNUMÉRÉE, en
+    #: complément des bornes : celles-ci décrivent un intervalle continu, et ne
+    #: savent donc pas exprimer « ces semaines-là, mais pas celle du milieu ».
+    #:
+    #: C'est ce qu'exige le tiroir de contexte, qui sépare les lignes composant
+    #: le chiffre cliqué (la semaine du clic) de celles qui l'éclairent (les
+    #: autres semaines des mêmes ordres). Sans énumération, les deux blocs se
+    #: recouvriraient et le premier ne se sommerait plus au chiffre affiché.
+    #:
+    #: Vide = aucune restriction, comme tous les autres filtres de liste. Se
+    #: combine en ET avec ``date_debut``/``date_fin`` lorsque les deux sont
+    #: posés.
+    semaines_debut: list[date] = Field(default_factory=list, max_length=LISTE_MAX)
+
     programmes: list[str] = Field(default_factory=list, max_length=LISTE_MAX)
     #: Périmètres — les lignes de production. Axe d'analyse plus fin que le
     #: programme, et seul niveau où le coefficient de nomenclature est homogène.
@@ -190,16 +204,30 @@ class Filtres(BaseModel):
         la méthode retourne une période vide.
         """
         if not (self.date_debut and self.date_fin):
-            return self.model_copy(update={"date_debut": None, "date_fin": None})
+            return self.model_copy(
+                update={"date_debut": None, "date_fin": None, "semaines_debut": []}
+            )
         duree = self.date_fin - self.date_debut
         return self.model_copy(update={
             "date_debut": self.date_debut - duree - timedelta(days=7),
             "date_fin": self.date_debut - timedelta(days=7),
+            # La liste énumérée désigne des semaines de la période COURANTE :
+            # la reporter telle quelle sur la période précédente ne
+            # sélectionnerait rien, et la variation afficherait une chute de
+            # 100 % là où il n'y a qu'une incohérence de bornes.
+            "semaines_debut": [],
         })
 
     def sans_dates(self) -> Filtres:
-        """Mêmes filtres, sans bornes temporelles (pour l'histogramme du slicer)."""
-        return self.model_copy(update={"date_debut": None, "date_fin": None})
+        """Mêmes filtres, sans AUCUNE borne temporelle (histogramme du slicer).
+
+        La liste énumérée de semaines en est une : la laisser réduirait
+        l'histogramme aux seules semaines retenues, alors qu'il est là pour
+        montrer ce que la sélection écarte.
+        """
+        return self.model_copy(
+            update={"date_debut": None, "date_fin": None, "semaines_debut": []}
+        )
 
 
 @dataclass(frozen=True)
@@ -245,6 +273,9 @@ def construire_predicat(
     if filtres.date_fin:
         conditions.append(f"{alias}.semaine_debut <= %(date_fin)s")
         params["date_fin"] = filtres.date_fin
+    if filtres.semaines_debut:
+        conditions.append(f"{alias}.semaine_debut = ANY(%(semaines_debut)s)")
+        params["semaines_debut"] = list(filtres.semaines_debut)
 
     for champ, colonne, cle in (
         (filtres.programmes, "parent_programme", "programmes"),

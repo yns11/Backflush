@@ -245,6 +245,26 @@ Le contexte est calculé côté serveur (`Repository.contexte_of`) : les deux c�
 du mouvement — production déclarée et consommation déclarée — remontent d'une
 seule requête, parce que `fact_ecart_of` naît d'une jointure complète.
 
+**Deux blocs disjoints**, sur le modèle du `1. PRODUCTION` / `2. ÉCART DE
+PRÉLÈVEMENT` du tableau croisé, parce qu'ils ne répondent pas à la même
+question :
+
+| Bloc | Portée | Ce qu'il dit |
+|---|---|---|
+| 1. Lignes du chiffre cliqué | la semaine du clic | ce qui **fait** le chiffre — le total de son pied de page est exactement l'écart affiché dans le bandeau |
+| 2. Autres semaines des mêmes ordres | les semaines voisines | ce qui l'**éclaire** — un écart de signe opposé ici annule celui du bloc 1 |
+
+L'égalité « total du bloc 1 = chiffre cliqué » est ce qui rend le tiroir
+vérifiable, et elle impose que les deux blocs ne se recouvrent pas. D'où le
+filtre `semaines_debut`, une restriction **énumérée** : la semaine du clic est
+le plus souvent au milieu de l'étendue, et des bornes continues ne savent pas
+l'exclure du second bloc.
+
+Le second bloc n'existe que s'il a quelque chose à montrer. Son absence n'est
+pas un vide à combler mais une **réponse** : ces ordres n'ont bougé nulle part
+ailleurs, l'écart est résiduel à cette maille — et c'est écrit ainsi, plutôt
+qu'affiché comme un tableau vide.
+
 ### 2.11 Performance
 
 | Mécanisme | Effet |
